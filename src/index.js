@@ -10,6 +10,12 @@ const PORT = process.env.PORT || 5000
 const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
 const allowedOrigins = clientUrl.split(',').map(url => url.trim())
 
+// Log all incoming requests and their origin headers
+app.use((req, res, next) => {
+  console.log(`🔍 [Incoming] ${req.method} ${req.path} | Origin: ${req.get('origin') || 'None'} | Headers: ${JSON.stringify(req.headers)}`)
+  next()
+})
+
 // Middleware
 app.use(cors({
   origin: allowedOrigins,
