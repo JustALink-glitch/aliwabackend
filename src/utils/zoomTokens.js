@@ -17,7 +17,7 @@ const generateSDKSignature = (meetingNumber, role = 0) => {
   const sdkSecret = process.env.ZOOM_SDK_SECRET
 
   if (!sdkKey || !sdkSecret) {
-    throw new Error('Missing ZOOM_SDK_KEY or ZOOM_SDK_SECRET in env variables')
+    throw new Error('Missing ZOOM_SDK_KEY or ZOOM_SDK_SECRET in environment variables')
   }
 
   const payload = {
