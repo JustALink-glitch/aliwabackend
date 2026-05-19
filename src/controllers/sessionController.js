@@ -1,55 +1,108 @@
 const supabase = require('../config/supabase')
 
-// GET ALL SESSIONS
+const EMPTY_UUID = '00000000-0000-0000-0000-000000000000'
+
+const getTrainerCohortIds = async (trainerId) => {
+  const ids = new Set()
+
+  const { data: assignments, error: assignmentError } = await supabase
+    .from('cohort_trainers')
+    .select('cohort_id')
+    .eq('trainer_id', trainerId)
+
+  if (!assignmentError) {
+    ;(assignments || []).forEach(row => row.cohort_id && ids.add(row.cohort_id))
+  }
+
+  const { data: fallbackCohorts } = await supabase
+    .from('cohorts')
+    .select('id')
+    .eq('trainer_id', trainerId)
+
+  ;(fallbackCohorts || []).forEach(row => row.id && ids.add(row.id))
+  return [...ids]
+}
+
+const getTrainerCourseIds = async (trainerId) => {
+  const cohortIds = await getTrainerCohortIds(trainerId)
+  let query = supabase.from('courses').select('id')
+
+  if (cohortIds.length > 0) {
+    query = query.or(`trainer_id.eq.${trainerId},cohort_id.in.(${cohortIds.join(',')})`)
+  } else {
+    query = query.eq('trainer_id', trainerId)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+  return [...new Set((data || []).map(course => course.id).filter(Boolean))]
+}
+
+const enrichSessions = async (sessions) => {
+  const courseIds = [...new Set((sessions || []).map(session => session.course_id).filter(Boolean))]
+  const trainerIds = [...new Set((sessions || []).map(session => session.trainer_id).filter(Boolean))]
+
+  const [coursesRes, trainersRes] = await Promise.all([
+    courseIds.length
+      ? supabase.from('courses').select('id, name').in('id', courseIds)
+      : Promise.resolve({ data: [], error: null }),
+    trainerIds.length
+      ? supabase.from('users').select('id, first_name, last_name').in('id', trainerIds)
+      : Promise.resolve({ data: [], error: null })
+  ])
+
+  if (coursesRes.error) throw coursesRes.error
+  if (trainersRes.error) throw trainersRes.error
+
+  const coursesById = new Map((coursesRes.data || []).map(course => [course.id, course]))
+  const trainersById = new Map((trainersRes.data || []).map(trainer => [trainer.id, trainer]))
+
+  return (sessions || []).map(session => ({
+    ...session,
+    course: coursesById.get(session.course_id) || null,
+    trainer: trainersById.get(session.trainer_id) || null
+  }))
+}
+
 const getSessions = async (req, res) => {
   try {
     const { courseId, trainerId } = req.query
-    let query = supabase
-      .from('sessions')
-      .select('*, course:courses(name), trainer:users(id, first_name, last_name)')
+    let query = supabase.from('sessions').select('*')
 
-    if (courseId) {
-      query = query.eq('course_id', courseId)
-    }
+    if (courseId) query = query.eq('course_id', courseId)
+    if (trainerId) query = query.eq('trainer_id', trainerId)
 
-    if (trainerId) {
-      query = query.eq('trainer_id', trainerId)
-    }
-
-    // Role-based filtering
     if (req.user.role === 'student') {
-      const { data: enrollments } = await supabase
+      const { data: enrollments, error } = await supabase
         .from('enrollments')
         .select('course_id')
         .eq('student_id', req.user.id)
+      if (error) throw error
 
-      if (!enrollments || enrollments.length === 0) {
-        return res.json({ sessions: [] })
-      }
-
-      const courseIds = enrollments.map(e => e.course_id)
-      query = query.in('course_id', courseIds)
+      const courseIds = [...new Set((enrollments || []).map(e => e.course_id).filter(Boolean))]
+      query = query.in('course_id', courseIds.length > 0 ? courseIds : [EMPTY_UUID])
     } else if (req.user.role === 'trainer') {
-      // Allow filtering by default. If trainer asks, show theirs.
+      const courseIds = await getTrainerCourseIds(req.user.id)
+      query = query.in('course_id', courseIds.length > 0 ? courseIds : [EMPTY_UUID])
     }
 
-    const { data: sessions, error } = await query.order('scheduled_at', { ascending: true })
+    const { data, error } = await query.order('scheduled_at', { ascending: true })
     if (error) throw error
 
-    res.json({ sessions })
+    const sessions = await enrichSessions(data || [])
+    res.json({ success: true, sessions })
   } catch (error) {
     console.error('getSessions error:', error)
-    res.status(500).json({ message: 'Failed to fetch sessions', error: error.message })
+    res.status(500).json({ success: false, message: 'Failed to fetch sessions', error: error.message })
   }
 }
 
-// GET SINGLE SESSION
 const getSession = async (req, res) => {
   try {
     const { id } = req.params
     const { data: session, error } = await supabase
       .from('sessions')
-      .select('*, course:courses(name), trainer:users(id, first_name, last_name)')
+      .select('*')
       .eq('id', id)
       .single()
 
@@ -57,14 +110,14 @@ const getSession = async (req, res) => {
       return res.status(404).json({ message: 'Session not found' })
     }
 
-    res.json({ session })
+    const [enriched] = await enrichSessions([session])
+    res.json({ success: true, session: enriched })
   } catch (error) {
     console.error('getSession error:', error)
-    res.status(500).json({ message: 'Failed to fetch session', error: error.message })
+    res.status(500).json({ success: false, message: 'Failed to fetch session', error: error.message })
   }
 }
 
-// CREATE SESSION (Admin or Trainer)
 const createSession = async (req, res) => {
   try {
     const {
@@ -77,7 +130,23 @@ const createSession = async (req, res) => {
       return res.status(400).json({ message: 'course_id, title and scheduled_at are required' })
     }
 
-    const trainerId = req.user.role === 'trainer' ? req.user.id : req.body.trainer_id || null
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id, trainer_id, cohort_id')
+      .eq('id', course_id)
+      .single()
+    if (courseError || !course) {
+      return res.status(404).json({ message: 'Course not found' })
+    }
+
+    let trainerId = req.body.trainer_id || course.trainer_id || null
+    if (req.user.role === 'trainer') {
+      const courseIds = await getTrainerCourseIds(req.user.id)
+      if (!courseIds.includes(course_id)) {
+        return res.status(403).json({ message: 'You are not assigned to this course' })
+      }
+      trainerId = req.user.id
+    }
 
     const { data: session, error } = await supabase
       .from('sessions')
@@ -100,17 +169,18 @@ const createSession = async (req, res) => {
 
     if (error) throw error
 
+    const [enriched] = await enrichSessions([session])
     res.status(201).json({
+      success: true,
       message: 'Session scheduled successfully',
-      session
+      session: enriched
     })
   } catch (error) {
     console.error('createSession error:', error)
-    res.status(500).json({ message: 'Failed to schedule session', error: error.message })
+    res.status(500).json({ success: false, message: 'Failed to schedule session', error: error.message })
   }
 }
 
-// UPDATE SESSION (Admin or Trainer)
 const updateSession = async (req, res) => {
   try {
     const { id } = req.params
@@ -120,14 +190,13 @@ const updateSession = async (req, res) => {
       is_recurring, recurrence_frequency, recurrence_end_date
     } = req.body
 
-    // If trainer, verify they scheduled/own this session
     if (req.user.role === 'trainer') {
       const { data: existing } = await supabase
         .from('sessions')
         .select('trainer_id')
         .eq('id', id)
         .single()
-      
+
       if (!existing || existing.trainer_id !== req.user.id) {
         return res.status(403).json({ message: 'You are not authorized to update this session' })
       }
@@ -154,17 +223,18 @@ const updateSession = async (req, res) => {
 
     if (error) throw error
 
+    const [enriched] = await enrichSessions([session])
     res.json({
+      success: true,
       message: 'Session updated successfully',
-      session
+      session: enriched
     })
   } catch (error) {
     console.error('updateSession error:', error)
-    res.status(500).json({ message: 'Failed to update session', error: error.message })
+    res.status(500).json({ success: false, message: 'Failed to update session', error: error.message })
   }
 }
 
-// DELETE SESSION (Admin or Trainer)
 const deleteSession = async (req, res) => {
   try {
     const { id } = req.params
@@ -175,7 +245,7 @@ const deleteSession = async (req, res) => {
         .select('trainer_id')
         .eq('id', id)
         .single()
-      
+
       if (!existing || existing.trainer_id !== req.user.id) {
         return res.status(403).json({ message: 'You are not authorized to delete this session' })
       }
@@ -188,10 +258,10 @@ const deleteSession = async (req, res) => {
 
     if (error) throw error
 
-    res.json({ message: 'Session deleted successfully' })
+    res.json({ success: true, message: 'Session deleted successfully' })
   } catch (error) {
     console.error('deleteSession error:', error)
-    res.status(500).json({ message: 'Failed to delete session', error: error.message })
+    res.status(500).json({ success: false, message: 'Failed to delete session', error: error.message })
   }
 }
 

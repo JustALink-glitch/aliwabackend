@@ -12,6 +12,33 @@ const generateTempPassword = () => {
   return password
 }
 
+const roleTables = {
+  admin: 'admins',
+  trainer: 'trainers',
+  student: 'students'
+}
+
+const syncRoleProfile = async (user) => {
+  const table = roleTables[user.role]
+  if (!table) return
+
+  const { error } = await supabase
+    .from(table)
+    .upsert({
+      id: user.id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      email: user.email,
+      phone: user.phone || null,
+      status: user.status || 'pending',
+      updated_at: new Date()
+    })
+
+  if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
+    throw error
+  }
+}
+
 // ─────────────────────────────────────────────
 // GET ALL USERS
 // ─────────────────────────────────────────────
@@ -130,6 +157,7 @@ const inviteTrainer = async (req, res) => {
       .single()
 
     if (error) throw error
+    await syncRoleProfile(trainer)
 
     // Send invitation email (non-blocking — don't fail if email fails)
     sendTrainerInvitation({ to: email, firstName, tempPassword }).catch(err => {
@@ -137,6 +165,7 @@ const inviteTrainer = async (req, res) => {
     })
 
     res.status(201).json({
+      success: true,
       message: 'Trainer invited successfully. An invitation email has been sent.',
       trainer: {
         id: trainer.id,
@@ -192,6 +221,7 @@ const onboardStudent = async (req, res) => {
       .single()
 
     if (studentError) throw studentError
+    await syncRoleProfile(student)
 
     // Enroll student in course + cohort
     const { error: enrollError } = await supabase
@@ -217,6 +247,7 @@ const onboardStudent = async (req, res) => {
     })
 
     res.status(201).json({
+      success: true,
       message: 'Student onboarded successfully. An invitation email has been sent.',
       student: {
         id: student.id,
@@ -288,6 +319,7 @@ const bulkOnboardStudents = async (req, res) => {
           .select().single()
 
         if (error) throw error
+        await syncRoleProfile(newStudent)
 
         if (courseId && cohortId) {
           await supabase.from('enrollments').insert({
@@ -311,6 +343,7 @@ const bulkOnboardStudents = async (req, res) => {
     }
 
     res.status(201).json({
+      success: true,
       message: `${results.length} students onboarded successfully`,
       results,
       errors
@@ -364,8 +397,10 @@ const updateUser = async (req, res) => {
       .single()
 
     if (error) throw error
+    await syncRoleProfile(data)
 
     res.json({
+      success: true,
       message: 'User updated successfully',
       user: {
         id: data.id,
@@ -401,7 +436,14 @@ const revokeAccess = async (req, res) => {
 
     if (error) throw error
 
-    res.json({ message: 'User access revoked successfully' })
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, first_name, last_name, email, phone, role, status')
+      .eq('id', id)
+      .single()
+    if (user) await syncRoleProfile(user)
+
+    res.json({ success: true, message: 'User access revoked successfully' })
   } catch (error) {
     res.status(500).json({ message: 'Failed to revoke access', error: error.message })
   }
@@ -426,7 +468,7 @@ const deleteUser = async (req, res) => {
 
     if (error) throw error
 
-    res.json({ message: 'User deleted successfully' })
+    res.json({ success: true, message: 'User deleted successfully' })
   } catch (error) {
     res.status(500).json({ message: 'Failed to delete user', error: error.message })
   }

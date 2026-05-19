@@ -11,6 +11,33 @@ const generateToken = (user) => {
   )
 }
 
+const roleTables = {
+  admin: 'admins',
+  trainer: 'trainers',
+  student: 'students'
+}
+
+const syncRoleProfile = async (user) => {
+  const table = roleTables[user.role]
+  if (!table) return
+
+  const { error } = await supabase
+    .from(table)
+    .upsert({
+      id: user.id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      email: user.email,
+      phone: user.phone || null,
+      status: user.status || 'active',
+      updated_at: new Date()
+    })
+
+  if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
+    throw error
+  }
+}
+
 // ─────────────────────────────────────────────
 // REGISTER (Admin self-registration)
 // ─────────────────────────────────────────────
@@ -45,6 +72,7 @@ const register = async (req, res) => {
         status: 'active', is_first_login: false
       }).select().single()
     if (userError) throw userError
+    await syncRoleProfile(user)
 
     const token = generateToken(user)
     res.status(201).json({
@@ -147,6 +175,7 @@ const setPassword = async (req, res) => {
 
     // Generate new token with updated user data
     const updatedUser = { ...user, is_first_login: false, status: 'active' }
+    await syncRoleProfile(updatedUser)
     const token = generateToken(updatedUser)
 
     res.json({
