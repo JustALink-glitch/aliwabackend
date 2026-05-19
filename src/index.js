@@ -7,8 +7,15 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
-const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173,https://aliwavirtualplatform.vercel.app'
-const allowedOrigins = clientUrl.split(',').map(url => url.trim())
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
+const allowedOrigins = clientUrl.split(',').map(url => url.trim().replace(/\/$/, ''))
+
+if (!allowedOrigins.includes('https://aliwavirtualplatform.vercel.app')) {
+  allowedOrigins.push('https://aliwavirtualplatform.vercel.app')
+}
+if (!allowedOrigins.includes('http://localhost:5173')) {
+  allowedOrigins.push('http://localhost:5173')
+}
 
 // Log all incoming requests and their origin headers
 app.use((req, res, next) => {
