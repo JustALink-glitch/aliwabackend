@@ -18,7 +18,7 @@ const createTransporter = () => {
 }
 
 const FROM = process.env.SMTP_FROM || 'Training Ops <noreply@trainingops.com>'
-const APP_URL = process.env.CLIENT_URL || 'http://localhost:5173'
+const APP_URL = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim()
 
 /**
  * Send trainer invitation email with temporary password

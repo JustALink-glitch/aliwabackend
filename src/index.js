@@ -7,9 +7,18 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
+const allowedOrigins = clientUrl.split(',').map(url => url.trim())
+
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true)
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`))
+    }
+  },
   credentials: true
 }))
 app.use(express.json())
