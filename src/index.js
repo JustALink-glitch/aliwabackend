@@ -7,7 +7,7 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
-const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173,https://aliwavirtualplatform.vercel.app'
 const allowedOrigins = clientUrl.split(',').map(url => url.trim())
 
 // Log all incoming requests and their origin headers
