@@ -16,7 +16,7 @@ router.get('/:id', authorize('admin', 'trainer'), getUser)
 router.post('/invite-trainer', authorize('admin'), inviteTrainer)
 router.post('/onboard-student', authorize('admin'), onboardStudent)
 router.post('/bulk-onboard', authorize('admin'), bulkOnboardStudents)
-router.put('/:id', authorize('admin'), updateUser)
+router.put('/:id', authorize('admin', 'trainer', 'student'), updateUser)
 router.patch('/:id/revoke', authorize('admin'), revokeAccess)
 router.delete('/:id', authorize('admin'), deleteUser)
 

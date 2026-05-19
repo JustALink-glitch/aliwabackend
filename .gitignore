@@ -1,6 +1,7 @@
 node_modules
 .env
 node_modules/
+zoom_attendance.sql
 
 .env
 
@@ -9,3 +10,4 @@ node_modules/
 dist/
 build/
 npm-dbug.log*
+*.log
