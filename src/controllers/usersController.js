@@ -39,12 +39,39 @@ const syncRoleProfile = async (user) => {
   }
 }
 
+const EMPTY_UUID = '00000000-0000-0000-0000-000000000000'
+
+const getTrainerCohortIds = async (trainerId) => {
+  const ids = new Set()
+
+  const { data: assignments, error: assignmentError } = await supabase
+    .from('cohort_trainers')
+    .select('cohort_id')
+    .eq('trainer_id', trainerId)
+
+  if (!assignmentError) {
+    ;(assignments || []).forEach(row => row.cohort_id && ids.add(row.cohort_id))
+  }
+
+  const { data: fallbackCohorts } = await supabase
+    .from('cohorts')
+    .select('id')
+    .eq('trainer_id', trainerId)
+
+  ;(fallbackCohorts || []).forEach(row => row.id && ids.add(row.id))
+  return [...ids]
+}
+
 // ─────────────────────────────────────────────
 // GET ALL USERS
 // ─────────────────────────────────────────────
 const getUsers = async (req, res) => {
   try {
     const { role, status, cohort_id } = req.query
+    if (req.user.role === 'trainer' && role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
+    }
+
     let query = supabase
       .from('users')
       .select('id, first_name, last_name, email, role, phone, status, is_first_login, created_at')
@@ -85,6 +112,26 @@ const getUsers = async (req, res) => {
         }
         
         query = query.in('id', trainerIds.length > 0 ? trainerIds : ['00000000-0000-0000-0000-000000000000'])
+      }
+    }
+
+    if (req.user.role === 'trainer' && role === 'student') {
+      const trainerCohortIds = await getTrainerCohortIds(req.user.id)
+      const allowedCohortIds = cohort_id
+        ? trainerCohortIds.filter(id => id === cohort_id)
+        : trainerCohortIds
+
+      if (allowedCohortIds.length === 0) {
+        query = query.eq('id', EMPTY_UUID)
+      } else {
+        const { data: enrollments, error: enrollmentError } = await supabase
+          .from('enrollments')
+          .select('student_id')
+          .in('cohort_id', allowedCohortIds)
+        if (enrollmentError) throw enrollmentError
+
+        const studentIds = [...new Set((enrollments || []).map(e => e.student_id).filter(Boolean))]
+        query = query.in('id', studentIds.length > 0 ? studentIds : [EMPTY_UUID])
       }
     }
 

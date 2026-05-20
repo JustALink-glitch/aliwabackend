@@ -11,7 +11,7 @@ const { authenticate, authorize } = require('../middleware/auth')
 router.use(authenticate)
 
 // Admin only routes
-router.get('/', authorize('admin'), getUsers)
+router.get('/', authorize('admin', 'trainer'), getUsers)
 router.get('/:id', authorize('admin', 'trainer'), getUser)
 router.post('/invite-trainer', authorize('admin'), inviteTrainer)
 router.post('/onboard-student', authorize('admin'), onboardStudent)
