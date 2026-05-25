@@ -36,7 +36,7 @@ const getAssignments = async (req, res) => {
     const { data: assignments, error } = await query.order('created_at', { ascending: false })
     if (error) throw error
 
-    res.json({ assignments })
+    res.json({ success: true, assignments: assignments || [] })
   } catch (error) {
     console.error('getAssignments error:', error)
     res.status(500).json({ message: 'Failed to fetch assignments', error: error.message })
@@ -92,6 +92,7 @@ const createAssignment = async (req, res) => {
     if (error) throw error
 
     res.status(201).json({
+      success: true,
       message: 'Assignment created successfully',
       assignment
     })

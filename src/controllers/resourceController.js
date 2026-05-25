@@ -30,7 +30,13 @@ const getResources = async (req, res) => {
     const { data: resources, error } = await query.order('created_at', { ascending: false })
     if (error) throw error
 
-    res.json({ resources })
+    // Normalise: add file_type alias so frontend works regardless of column name
+    const normalised = (resources || []).map(r => ({
+      ...r,
+      file_type: r.file_type || r.type || 'link'
+    }))
+
+    res.json({ resources: normalised })
   } catch (error) {
     console.error('getResources error:', error)
     res.status(500).json({ message: 'Failed to fetch resources', error: error.message })
@@ -40,30 +46,47 @@ const getResources = async (req, res) => {
 // CREATE RESOURCE (Admin or Trainer)
 const createResource = async (req, res) => {
   try {
-    const { course_id, name, type, url, size } = req.body
+    const { course_id, name, url, size } = req.body
+    // Accept both 'file_type' (frontend) and 'type' (legacy) 
+    const fileType = req.body.file_type || req.body.type || 'link'
 
     if (!course_id || !name || !url) {
       return res.status(400).json({ message: 'course_id, name and url are required' })
     }
 
-    const { data: resource, error } = await supabase
+    // Try inserting with file_type column first, fall back to type
+    let insertData = {
+      course_id,
+      uploaded_by: req.user.id,
+      name,
+      url,
+      size: size || 'N/A'
+    }
+
+    // Try file_type column (newer schema)
+    let { data: resource, error } = await supabase
       .from('resources')
-      .insert({
-        course_id,
-        uploaded_by: req.user.id,
-        name,
-        type: type || 'link',
-        url,
-        size: size || 'N/A'
-      })
+      .insert({ ...insertData, file_type: fileType })
       .select()
       .single()
+
+    // If file_type column doesn't exist, fall back to type column
+    if (error && (error.code === '42703' || error.message?.includes('file_type'))) {
+      const res2 = await supabase
+        .from('resources')
+        .insert({ ...insertData, type: fileType })
+        .select()
+        .single()
+      resource = res2.data
+      error = res2.error
+    }
 
     if (error) throw error
 
     res.status(201).json({
+      success: true,
       message: 'Resource uploaded successfully',
-      resource
+      resource: { ...resource, file_type: resource?.file_type || resource?.type || fileType }
     })
   } catch (error) {
     console.error('createResource error:', error)

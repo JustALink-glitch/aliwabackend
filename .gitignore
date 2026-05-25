@@ -5,6 +5,11 @@ zoom_attendance.sql
 
 .env
 
+tests/
+tests/**
+test-*.js
+
+
 .DS_Store
 
 dist/

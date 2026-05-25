@@ -51,12 +51,17 @@ const getCohorts = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('cohorts')
-      .select('*')
+      .select('*, enrollments(count)')
       .order('created_at', { ascending: false })
 
     if (error) throw error
 
-    res.json({ success: true, cohorts: data || [], count: data?.length || 0 })
+    const cohortsWithCount = data.map(cohort => ({
+      ...cohort,
+      student_count: cohort.enrollments?.[0]?.count || 0
+    }))
+
+    res.json({ success: true, cohorts: cohortsWithCount || [], count: cohortsWithCount?.length || 0 })
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to get cohorts', error: error.message })
   }
@@ -71,7 +76,7 @@ const getCohort = async (req, res) => {
 
     const { data, error } = await supabase
       .from('cohorts')
-      .select('*')
+      .select('*, enrollments(count)')
       .eq('id', id)
       .single()
 
@@ -80,6 +85,7 @@ const getCohort = async (req, res) => {
     }
     if (error) throw error
 
+    data.student_count = data.enrollments?.[0]?.count || 0
     res.json({ success: true, cohort: data })
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to get cohort', error: error.message })
