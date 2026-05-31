@@ -13,7 +13,7 @@ const computeAttendanceForMeeting = async (meetingId) => {
   // 1. Fetch the scheduled session details from database
   const { data: sessionData, error: sessionError } = await supabase
     .from('sessions')
-    .select('duration, id')
+    .select('duration, id, attendance_threshold_percentage')
     .eq('zoom_meeting_id', meetingId)
     .maybeSingle()
 
@@ -100,9 +100,14 @@ const computeAttendanceForMeeting = async (meetingId) => {
       continue
     }
 
-    // Threshold logic: Attended duration >= 40% of scheduled duration
+    // Threshold logic: Attended duration >= customized % threshold of scheduled duration
+    const thresholdPercentage = sessionData && sessionData.attendance_threshold_percentage !== undefined && sessionData.attendance_threshold_percentage !== null
+      ? parseInt(sessionData.attendance_threshold_percentage, 10)
+      : 40
+    const thresholdRatio = thresholdPercentage / 100
+
     const attendanceRatio = student.totalDurationSeconds / scheduledDurationSeconds
-    const status = attendanceRatio >= 0.40 ? 'present' : 'absent'
+    const status = attendanceRatio >= thresholdRatio ? 'present' : 'absent'
 
     summariesToUpsert.push({
       zoom_meeting_id: meetingId,

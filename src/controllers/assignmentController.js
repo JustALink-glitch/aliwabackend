@@ -1,5 +1,51 @@
 const supabase = require('../config/supabase')
 
+const getTrainerCourseIds = async (trainerId) => {
+  const { data: courses, error } = await supabase
+    .from('courses')
+    .select('id')
+    .eq('trainer_id', trainerId)
+
+  if (error) throw error
+  return [...new Set((courses || []).map(course => course.id).filter(Boolean))]
+}
+
+const getTrainerAssignmentIds = async (trainerId) => {
+  const courseIds = await getTrainerCourseIds(trainerId)
+  let query = supabase.from('assignments').select('id')
+
+  if (courseIds.length > 0) {
+    query = query.or(`trainer_id.eq.${trainerId},course_id.in.(${courseIds.join(',')})`)
+  } else {
+    query = query.eq('trainer_id', trainerId)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+  return [...new Set((data || []).map(a => a.id).filter(Boolean))]
+}
+
+const canTrainerAccessAssignment = async (trainerId, assignmentId) => {
+  const { data: assignment, error } = await supabase
+    .from('assignments')
+    .select('trainer_id, course_id')
+    .eq('id', assignmentId)
+    .single()
+
+  if (error || !assignment) return false
+  if (assignment.trainer_id === trainerId) return true
+  if (!assignment.course_id) return false
+
+  const { data: course, error: courseError } = await supabase
+    .from('courses')
+    .select('trainer_id')
+    .eq('id', assignment.course_id)
+    .single()
+
+  if (courseError || !course) return false
+  return course.trainer_id === trainerId
+}
+
 // GET ALL ASSIGNMENTS
 const getAssignments = async (req, res) => {
   try {
@@ -28,9 +74,11 @@ const getAssignments = async (req, res) => {
       const courseIds = enrollments.map(e => e.course_id)
       query = query.in('course_id', courseIds)
     } else if (req.user.role === 'trainer') {
-      // Trainers can filter by default, or see all. Usually see their own.
-      // If no trainerId filter, we could optionally filter by their trainer_id
-      // but let's allow them to see all assignments in courses they teach or general.
+      const assignmentIds = await getTrainerAssignmentIds(req.user.id)
+      if (assignmentIds.length === 0) {
+        return res.json({ success: true, assignments: [] })
+      }
+      query = query.in('id', assignmentIds)
     }
 
     const { data: assignments, error } = await query.order('created_at', { ascending: false })
@@ -55,6 +103,13 @@ const getAssignment = async (req, res) => {
 
     if (error || !assignment) {
       return res.status(404).json({ message: 'Assignment not found' })
+    }
+
+    if (req.user.role === 'trainer') {
+      const hasAccess = await canTrainerAccessAssignment(req.user.id, id)
+      if (!hasAccess) {
+        return res.status(403).json({ message: 'You are not authorized to view this assignment' })
+      }
     }
 
     res.json({ assignment })

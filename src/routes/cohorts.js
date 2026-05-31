@@ -3,7 +3,7 @@ const router = express.Router()
 const { authenticateToken, authorizeRoles } = require('../middleware/auth')
 const {
   createCohort, getCohorts, getCohort, updateCohort, deleteCohort,
-  assignTrainer, enrollStudent
+  assignTrainer, unassignTrainer, enrollStudent
 } = require('../controllers/cohortController')
 
 router.post('/', authenticateToken, authorizeRoles('admin'), createCohort)
@@ -14,6 +14,7 @@ router.delete('/:id', authenticateToken, authorizeRoles('admin'), deleteCohort)
 
 // Cohort membership
 router.post('/:id/assign-trainer', authenticateToken, authorizeRoles('admin'), assignTrainer)
+router.post('/:id/unassign-trainer', authenticateToken, authorizeRoles('admin'), unassignTrainer)
 router.post('/:id/enroll-student', authenticateToken, authorizeRoles('admin'), enrollStudent)
 
 module.exports = router

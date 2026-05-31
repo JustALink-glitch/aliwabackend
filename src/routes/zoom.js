@@ -1,6 +1,6 @@
 const express = require('express')
 const router = express.Router()
-const { initiateOAuth, handleOAuthCallback, getSignature, getOBFToken } = require('../controllers/zoomOAuthController')
+const { initiateOAuth, handleOAuthCallback, getSignature, getOBFToken, checkZoomStatus } = require('../controllers/zoomOAuthController')
 const { authenticate } = require('../middleware/auth')
 
 /**
@@ -14,6 +14,13 @@ router.get('/authorize', initiateOAuth)
  * Target callback for Zoom OAuth server to trade code for tokens.
  */
 router.get('/callback', handleOAuthCallback)
+
+/**
+ * GET /api/zoom/status
+ * Returns connection status of trainer's Zoom account.
+ * Protected: requires valid application JWT.
+ */
+router.get('/status', authenticate, checkZoomStatus)
 
 /**
  * GET /api/zoom/signature

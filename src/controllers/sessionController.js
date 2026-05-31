@@ -1,39 +1,14 @@
 const supabase = require('../config/supabase')
+const { createZoomMeeting } = require('../utils/zoomTokens')
 
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000'
 
-const getTrainerCohortIds = async (trainerId) => {
-  const ids = new Set()
-
-  const { data: assignments, error: assignmentError } = await supabase
-    .from('cohort_trainers')
-    .select('cohort_id')
-    .eq('trainer_id', trainerId)
-
-  if (!assignmentError) {
-    ;(assignments || []).forEach(row => row.cohort_id && ids.add(row.cohort_id))
-  }
-
-  const { data: fallbackCohorts } = await supabase
-    .from('cohorts')
+const getTrainerCourseIds = async (trainerId) => {
+  const { data, error } = await supabase
+    .from('courses')
     .select('id')
     .eq('trainer_id', trainerId)
 
-  ;(fallbackCohorts || []).forEach(row => row.id && ids.add(row.id))
-  return [...ids]
-}
-
-const getTrainerCourseIds = async (trainerId) => {
-  const cohortIds = await getTrainerCohortIds(trainerId)
-  let query = supabase.from('courses').select('id')
-
-  if (cohortIds.length > 0) {
-    query = query.or(`trainer_id.eq.${trainerId},cohort_id.in.(${cohortIds.join(',')})`)
-  } else {
-    query = query.eq('trainer_id', trainerId)
-  }
-
-  const { data, error } = await query
   if (error) throw error
   return [...new Set((data || []).map(course => course.id).filter(Boolean))]
 }
@@ -123,7 +98,8 @@ const createSession = async (req, res) => {
     const {
       course_id, title, description, scheduled_at, duration,
       zoom_link, zoom_meeting_id, status, is_recurring,
-      recurrence_frequency, recurrence_end_date
+      recurrence_frequency, recurrence_end_date,
+      attendance_threshold_percentage
     } = req.body
 
     if (!course_id || !title || !scheduled_at) {
@@ -148,6 +124,30 @@ const createSession = async (req, res) => {
       trainerId = req.user.id
     }
 
+    // Auto-generate Zoom Link if not provided manually and trainer is present
+    let generatedZoomLink = ''
+    let generatedZoomMeetingId = ''
+    let generatedZoomPassword = ''
+
+    if (!zoom_link && trainerId) {
+      try {
+        const zoomMeeting = await createZoomMeeting(trainerId, title, scheduled_at, duration || '1 hour')
+        generatedZoomLink = zoomMeeting.joinUrl
+        generatedZoomMeetingId = zoomMeeting.meetingId
+        generatedZoomPassword = zoomMeeting.password
+      } catch (zoomError) {
+        console.error('❌ Failed to auto-create Zoom meeting:', zoomError.message)
+        if (zoomError.message.includes('refresh failed') || zoomError.message.includes('No Zoom OAuth tokens') || zoomError.message.includes('re-authorize Zoom')) {
+          return res.status(400).json({
+            success: false,
+            code: 'ZOOM_AUTH_REQUIRED',
+            message: 'Zoom authorization is required to auto-schedule classes. Please connect your Zoom account.'
+          })
+        }
+        return res.status(400).json({ success: false, message: zoomError.message })
+      }
+    }
+
     const { data: session, error } = await supabase
       .from('sessions')
       .insert({
@@ -157,12 +157,14 @@ const createSession = async (req, res) => {
         description: description || '',
         scheduled_at,
         duration: duration || '1 hour',
-        zoom_link: zoom_link || '',
-        zoom_meeting_id: zoom_meeting_id || '',
+        zoom_link: zoom_link || generatedZoomLink || '',
+        zoom_meeting_id: zoom_meeting_id || generatedZoomMeetingId || '',
+        zoom_password: generatedZoomPassword || '',
         status: status || 'upcoming',
         is_recurring: !!is_recurring,
         recurrence_frequency: recurrence_frequency || null,
-        recurrence_end_date: recurrence_end_date || null
+        recurrence_end_date: recurrence_end_date || null,
+        attendance_threshold_percentage: parseInt(attendance_threshold_percentage, 10) !== undefined && !isNaN(parseInt(attendance_threshold_percentage, 10)) ? parseInt(attendance_threshold_percentage, 10) : 40
       })
       .select()
       .single()
@@ -187,7 +189,8 @@ const updateSession = async (req, res) => {
     const {
       title, description, scheduled_at, duration,
       zoom_link, zoom_meeting_id, status, recording_url,
-      is_recurring, recurrence_frequency, recurrence_end_date
+      is_recurring, recurrence_frequency, recurrence_end_date,
+      attendance_threshold_percentage
     } = req.body
 
     if (req.user.role === 'trainer') {
@@ -215,7 +218,8 @@ const updateSession = async (req, res) => {
         ...(recording_url !== undefined && { recording_url }),
         ...(is_recurring !== undefined && { is_recurring: !!is_recurring }),
         ...(recurrence_frequency !== undefined && { recurrence_frequency: recurrence_frequency || null }),
-        ...(recurrence_end_date !== undefined && { recurrence_end_date: recurrence_end_date || null })
+        ...(recurrence_end_date !== undefined && { recurrence_end_date: recurrence_end_date || null }),
+        ...(attendance_threshold_percentage !== undefined && { attendance_threshold_percentage: parseInt(attendance_threshold_percentage, 10) !== undefined && !isNaN(parseInt(attendance_threshold_percentage, 10)) ? parseInt(attendance_threshold_percentage, 10) : 40 })
       })
       .eq('id', id)
       .select()

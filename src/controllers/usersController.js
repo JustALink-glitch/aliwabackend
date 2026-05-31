@@ -59,6 +59,16 @@ const getTrainerCohortIds = async (trainerId) => {
     .eq('trainer_id', trainerId)
 
   ;(fallbackCohorts || []).forEach(row => row.id && ids.add(row.id))
+
+  const { data: directCourseCohorts, error: courseError } = await supabase
+    .from('courses')
+    .select('cohort_id')
+    .eq('trainer_id', trainerId)
+
+  if (!courseError) {
+    ;(directCourseCohorts || []).forEach(row => row.cohort_id && ids.add(row.cohort_id))
+  }
+
   return [...ids]
 }
 
@@ -507,7 +517,56 @@ const deleteUser = async (req, res) => {
     if (req.user.id === id) {
       return res.status(400).json({ message: 'You cannot delete your own account' })
     }
+    // Fetch user to determine role and existence
+    const { data: existingUser, error: fetchErr } = await supabase
+      .from('users')
+      .select('id, role')
+      .eq('id', id)
+      .single()
 
+    if (fetchErr || !existingUser) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    // Remove dependent records first to avoid FK constraint errors
+    const cleanupTasks = [
+      supabase.from('submissions').delete().eq('student_id', id),
+      supabase.from('enrollments').delete().eq('student_id', id),
+      supabase.from('meeting_attendance_summary').delete().eq('user_id', id),
+      supabase.from('attendance_sessions').delete().eq('user_id', id),
+      supabase.from('zoom_oauth_tokens').delete().eq('user_id', id)
+    ]
+
+    // If trainer, remove trainer-specific relations
+    if (existingUser.role === 'trainer') {
+      cleanupTasks.push(supabase.from('cohort_trainers').delete().eq('trainer_id', id))
+      cleanupTasks.push(supabase.from('courses').update({ trainer_id: null }).eq('trainer_id', id))
+    }
+
+    // Run cleanup tasks (ignore not-found table errors individually)
+    for (const task of cleanupTasks) {
+      try {
+        const { error: taskErr } = await task
+        if (taskErr && taskErr.code !== '42P01' && taskErr.code !== 'PGRST205') {
+          console.warn('Cleanup task error:', taskErr.message)
+        }
+      } catch (e) {
+        console.warn('Cleanup task threw:', e.message)
+      }
+    }
+
+    // Remove role-specific row if present (students/trainers/admins)
+    const roleTables = { admin: 'admins', trainer: 'trainers', student: 'students' }
+    const roleTable = roleTables[existingUser.role]
+    if (roleTable) {
+      try {
+        await supabase.from(roleTable).delete().eq('id', id)
+      } catch (e) {
+        // ignore if table doesn't exist
+      }
+    }
+
+    // Finally delete the user
     const { error } = await supabase
       .from('users')
       .delete()

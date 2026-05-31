@@ -58,7 +58,21 @@ const handleWebhook = async (req, res) => {
         return res.status(200).json({ message: 'Skipped - no email' })
       }
 
-      console.log(`👤 Participant joined: ${displayName} (${email})`)
+      console.log(`👤 Participant joined: ${displayName} (${email}) at ${joinTime}`)
+
+      // Prevent race conditions: Check if this join segment already exists (e.g. left webhook came first or duplicate webhook)
+      const { data: existing } = await supabase
+        .from('attendance_sessions')
+        .select('id, leave_time')
+        .eq('zoom_meeting_id', meetingId)
+        .eq('email', email)
+        .eq('join_time', joinTime)
+        .maybeSingle()
+
+      if (existing) {
+        console.log(`ℹ️ Join segment already exists for ${email} at ${joinTime}. Skipping insertion.`)
+        return res.status(200).json({ success: true, action: 'skipped_duplicate_join' })
+      }
 
       // Attempt to resolve User ID in application database
       const { data: user } = await supabase
@@ -67,15 +81,13 @@ const handleWebhook = async (req, res) => {
         .eq('email', email)
         .maybeSingle()
 
-      const userId = user?.id || null
-
       // Insert new join session segment
       const { error } = await supabase
         .from('attendance_sessions')
         .insert({
           zoom_meeting_id: meetingId,
           zoom_meeting_uuid: meetingUuid,
-          user_id: userId,
+          user_id: user?.id || null,
           email: email,
           display_name: displayName,
           join_time: joinTime,
@@ -97,6 +109,7 @@ const handleWebhook = async (req, res) => {
       if (!participant) return res.status(400).json({ message: 'Missing participant details' })
 
       const email = participant.email?.toLowerCase().trim()
+      const joinTime = participant.join_time ? new Date(participant.join_time).toISOString() : null
       const leaveTime = participant.leave_time ? new Date(participant.leave_time).toISOString() : new Date().toISOString()
 
       if (!email) {
@@ -104,28 +117,32 @@ const handleWebhook = async (req, res) => {
         return res.status(200).json({ message: 'Skipped - no email' })
       }
 
-      console.log(`👤 Participant left: ${participant.user_name} (${email})`)
+      console.log(`👤 Participant left: ${participant.user_name} (${email}) at ${leaveTime}`)
 
-      // Find the most recent active session for this participant in this meeting that doesn't have a leave time
-      const { data: activeSessions, error: selectError } = await supabase
-        .from('attendance_sessions')
-        .select('*')
-        .eq('zoom_meeting_id', meetingId)
-        .eq('email', email)
-        .is('leave_time', null)
-        .order('join_time', { ascending: false })
+      // Calculate duration
+      const joinDate = joinTime ? new Date(joinTime) : new Date(leaveTime)
+      const leaveDate = new Date(leaveTime)
+      const durationSeconds = Math.max(0, Math.floor((leaveDate.getTime() - joinDate.getTime()) / 1000))
+
+      // 1. Find matching open join segment (by matching exact join_time or close window, or having no leave_time)
+      let query = supabase.from('attendance_sessions').select('*').eq('zoom_meeting_id', meetingId).eq('email', email)
+      
+      if (joinTime) {
+        query = query.eq('join_time', joinTime)
+      } else {
+        query = query.is('leave_time', null)
+      }
+
+      const { data: matchedSessions, error: selectError } = await query.order('join_time', { ascending: false })
 
       if (selectError) {
-        console.error('❌ Error finding active participant session:', selectError.message)
+        console.error('❌ Error finding matching join session:', selectError.message)
         return res.status(500).json({ error: selectError.message })
       }
 
-      if (activeSessions && activeSessions.length > 0) {
-        const sessionToUpdate = activeSessions[0]
-        const joinDate = new Date(sessionToUpdate.join_time)
-        const leaveDate = new Date(leaveTime)
-        const durationSeconds = Math.max(0, Math.floor((leaveDate.getTime() - joinDate.getTime()) / 1000))
-
+      if (matchedSessions && matchedSessions.length > 0) {
+        // Update matched segment with leave time and duration
+        const sessionToUpdate = matchedSessions[0]
         const { error: updateError } = await supabase
           .from('attendance_sessions')
           .update({
@@ -139,10 +156,10 @@ const handleWebhook = async (req, res) => {
           return res.status(500).json({ error: updateError.message })
         }
 
-        console.log(`✅ Session updated successfully. Duration: ${durationSeconds}s`)
+        console.log(`✅ Matched session updated successfully. Duration: ${durationSeconds}s`)
       } else {
-        // Fallback: If no open join session is found, we create a zero-duration or placeholder record
-        console.log(`⚠️ No active join record found for ${email}. Recording standalone left event.`)
+        // Fallback: If no join record was found (e.g. left webhook arrived first), insert a fully completed row
+        console.log(`⚠️ No active join record found for ${email}. Recording fully completed standalone segment.`)
         const { data: user } = await supabase
           .from('users')
           .select('id')
@@ -157,9 +174,9 @@ const handleWebhook = async (req, res) => {
             user_id: user?.id || null,
             email: email,
             display_name: participant.user_name,
-            join_time: leaveTime, // fallback
+            join_time: joinTime || leaveTime,
             leave_time: leaveTime,
-            duration_seconds: 0
+            duration_seconds: durationSeconds
           })
 
         if (insertError) {
@@ -207,6 +224,41 @@ const handleWebhook = async (req, res) => {
         })
 
       return res.status(200).json({ success: true, message: 'Processing meeting attendance' })
+    }
+
+    // 5. Recording completed/uploaded events - persist recording URL to session
+    if (event.startsWith('recording.') || event === 'recording.completed' || event === 'recording.uploaded') {
+      console.log(`🎞️ Recording event for meeting ${meetingId} — attempting to save recording URL`)
+
+      // Zoom may provide recording files in different payload shapes
+      const recordingFiles = payload.recording_files || payload.object?.recording_files || []
+      if (recordingFiles && recordingFiles.length > 0) {
+        const file = recordingFiles[0]
+        const recordingUrl = file.download_url || file.file_url || file.play_url || file.share_url || null
+
+        if (recordingUrl) {
+          try {
+            const { error: updateErr } = await supabase
+              .from('sessions')
+              .update({ recording_url: recordingUrl, updated_at: new Date().toISOString() })
+              .eq('zoom_meeting_id', meetingId)
+
+            if (updateErr) {
+              console.error('❌ Failed to save recording URL to sessions:', updateErr.message)
+            } else {
+              console.log('✅ Recording URL saved to sessions table')
+            }
+          } catch (e) {
+            console.error('❌ Error updating session with recording URL:', e.message)
+          }
+        } else {
+          console.log('⚠️ Recording event received but no usable file URL found')
+        }
+      } else {
+        console.log('⚠️ Recording event received but payload has no recording_files')
+      }
+
+      return res.status(200).json({ success: true, message: 'Recording processed' })
     }
 
     // Default response for unhandled events

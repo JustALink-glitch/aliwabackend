@@ -123,9 +123,76 @@ const refreshAccessToken = async (userId) => {
   }
 }
 
+/**
+ * Creates a Zoom meeting on behalf of the trainer using their OAuth credentials.
+ */
+const createZoomMeeting = async (trainerId, topic, startTimeISO, durationString) => {
+  let durationMinutes = 60 // default 1 hour
+  if (durationString) {
+    const numericMatch = String(durationString).toLowerCase().match(/([0-9.]+)/)
+    if (numericMatch) {
+      const val = parseFloat(numericMatch[1])
+      if (String(durationString).toLowerCase().includes('minute') || String(durationString).toLowerCase().includes('min')) {
+        durationMinutes = Math.round(val)
+      } else {
+        durationMinutes = Math.round(val * 60) // hours to minutes
+      }
+    } else {
+      const parsedInt = parseInt(durationString, 10)
+      if (!isNaN(parsedInt)) {
+        durationMinutes = parsedInt
+      }
+    }
+  }
+
+  console.log(`Creating Zoom meeting for trainer ${trainerId}. Topic: "${topic}", Start: ${startTimeISO}, Duration: ${durationMinutes} mins`)
+
+  // 1. Refresh and get the access token
+  const accessToken = await refreshAccessToken(trainerId)
+
+  // 2. Call Zoom API to create meeting
+  try {
+    const response = await axios({
+      method: 'post',
+      url: 'https://api.zoom.us/v2/users/me/meetings',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      data: {
+        topic: topic,
+        type: 2, // scheduled meeting
+        start_time: startTimeISO,
+        duration: durationMinutes,
+        timezone: 'UTC',
+        settings: {
+          host_video: true,
+          participant_video: true,
+          join_before_host: false,
+          mute_upon_entry: true,
+          waiting_room: true
+        }
+      }
+    })
+
+    const { join_url, id, password } = response.data
+    console.log(`✅ Zoom meeting created: ID ${id}, Join URL: ${join_url}`)
+
+    return {
+      joinUrl: join_url,
+      meetingId: String(id),
+      password: password || ''
+    }
+  } catch (error) {
+    console.error('❌ Zoom Meeting Creation failed:', error.response?.data || error.message)
+    throw new Error('Failed to auto-create Zoom meeting. Please verify your Zoom settings.')
+  }
+}
+
 module.exports = {
   generateSDKSignature,
   getStoredTokens,
   storeOAuthTokens,
-  refreshAccessToken
+  refreshAccessToken,
+  createZoomMeeting
 }

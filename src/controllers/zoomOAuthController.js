@@ -1,5 +1,5 @@
 const axios = require('axios')
-const { storeOAuthTokens, generateSDKSignature, refreshAccessToken } = require('../utils/zoomTokens')
+const { storeOAuthTokens, generateSDKSignature, refreshAccessToken, getStoredTokens } = require('../utils/zoomTokens')
 
 /**
  * Initiates Zoom OAuth flow by redirecting the user to Zoom
@@ -21,7 +21,7 @@ const initiateOAuth = (req, res) => {
     return res.status(500).json({ error: 'OAuth credentials not configured.' })
   }
 
-  const zoomAuthUrl = `https://zoom.us/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${userId}`
+  const zoomAuthUrl = `https://zoom.us/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('meeting:write:meeting meeting:write:meeting:admin')}&prompt=consent&state=${userId}`
   console.log(`🔗 Redirecting user to Zoom OAuth: ${zoomAuthUrl}`)
   res.redirect(zoomAuthUrl)
 }
@@ -152,9 +152,33 @@ const getOBFToken = async (req, res) => {
   }
 }
 
+/**
+ * Returns whether the logged in user has authorized Zoom.
+ *
+ * GET /api/zoom/status
+ */
+const checkZoomStatus = async (req, res) => {
+  const requesterId = req.user?.id
+  const requestedUserId = req.query.userId
+  const userId = req.user?.role === 'admin' && requestedUserId ? requestedUserId : requesterId
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required to check Zoom status.' })
+  }
+
+  try {
+    const tokens = await getStoredTokens(userId)
+    return res.json({ connected: !!tokens })
+  } catch (error) {
+    console.error('❌ Failed to check Zoom connection status:', error.message)
+    return res.status(500).json({ error: 'Failed to check Zoom status.' })
+  }
+}
+
 module.exports = {
   initiateOAuth,
   handleOAuthCallback,
   getSignature,
-  getOBFToken
+  getOBFToken,
+  checkZoomStatus
 }

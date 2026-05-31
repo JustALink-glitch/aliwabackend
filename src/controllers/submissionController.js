@@ -1,5 +1,59 @@
 const supabase = require('../config/supabase')
 
+const getTrainerCourseIds = async (trainerId) => {
+  const { data: courses, error } = await supabase
+    .from('courses')
+    .select('id')
+    .eq('trainer_id', trainerId)
+
+  if (error) throw error
+  return [...new Set((courses || []).map(course => course.id).filter(Boolean))]
+}
+
+const getTrainerAssignmentIds = async (trainerId) => {
+  const courseIds = await getTrainerCourseIds(trainerId)
+  let query = supabase.from('assignments').select('id')
+
+  if (courseIds.length > 0) {
+    query = query.or(`trainer_id.eq.${trainerId},course_id.in.(${courseIds.join(',')})`)
+  } else {
+    query = query.eq('trainer_id', trainerId)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+  return [...new Set((data || []).map(a => a.id).filter(Boolean))]
+}
+
+const canTrainerAccessSubmission = async (trainerId, submissionId) => {
+  const { data: submission, error } = await supabase
+    .from('submissions')
+    .select('assignment_id')
+    .eq('id', submissionId)
+    .single()
+
+  if (error || !submission) return false
+
+  const { data: assignment, error: assignmentError } = await supabase
+    .from('assignments')
+    .select('trainer_id, course_id')
+    .eq('id', submission.assignment_id)
+    .single()
+
+  if (assignmentError || !assignment) return false
+  if (assignment.trainer_id === trainerId) return true
+  if (!assignment.course_id) return false
+
+  const { data: course, error: courseError } = await supabase
+    .from('courses')
+    .select('trainer_id')
+    .eq('id', assignment.course_id)
+    .single()
+
+  if (courseError || !course) return false
+  return course.trainer_id === trainerId
+}
+
 // GET ALL SUBMISSIONS
 const getSubmissions = async (req, res) => {
   try {
@@ -20,30 +74,21 @@ const getSubmissions = async (req, res) => {
     if (req.user.role === 'student') {
       query = query.eq('student_id', req.user.id)
     } else if (req.user.role === 'trainer') {
-      // If we want trainers to see only submissions for their assignments
       if (studentId) {
         query = query.eq('student_id', studentId)
       }
-      
-      // Let's filter by assignments created by this trainer
-      const { data: assignments } = await supabase
-        .from('assignments')
-        .select('id')
-        .eq('trainer_id', req.user.id)
 
-      if (assignments && assignments.length > 0) {
-        const assignmentIds = assignments.map(a => a.id)
-        if (assignmentId) {
-          // If already filtering by specific assignment, make sure it's theirs
-          if (!assignmentIds.includes(assignmentId)) {
-            return res.status(403).json({ message: 'You are not authorized to view submissions for this assignment' })
-          }
-        } else {
-          query = query.in('assignment_id', assignmentIds)
+      const assignmentIds = await getTrainerAssignmentIds(req.user.id)
+      if (assignmentIds.length === 0) {
+        return res.json({ submissions: [] })
+      }
+
+      if (assignmentId) {
+        if (!assignmentIds.includes(assignmentId)) {
+          return res.status(403).json({ message: 'You are not authorized to view submissions for this assignment' })
         }
       } else {
-        // Trainer has no assignments yet, return empty
-        return res.json({ submissions: [] })
+        query = query.in('assignment_id', assignmentIds)
       }
     } else {
       // Admins can filter by student
@@ -76,9 +121,15 @@ const getSubmission = async (req, res) => {
       return res.status(404).json({ message: 'Submission not found' })
     }
 
-    // Auth check
     if (req.user.role === 'student' && submission.student_id !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized' })
+    }
+
+    if (req.user.role === 'trainer') {
+      const hasAccess = await canTrainerAccessSubmission(req.user.id, id)
+      if (!hasAccess) {
+        return res.status(403).json({ message: 'You are not authorized to view this submission' })
+      }
     }
 
     res.json({ submission })
@@ -110,6 +161,7 @@ const createSubmission = async (req, res) => {
       .single()
 
     let result
+    const now = new Date().toISOString()
     if (existing) {
       // Overwrite/Update existing submission
       const { data, error } = await supabase
@@ -118,7 +170,7 @@ const createSubmission = async (req, res) => {
           file_url,
           note: note || '',
           status: 'pending',
-          submitted_at: new Date(),
+          submitted_at: now,
           grade: null,
           feedback: null,
           graded_at: null
@@ -137,7 +189,8 @@ const createSubmission = async (req, res) => {
           student_id: req.user.id,
           file_url,
           note: note || '',
-          status: 'pending'
+          status: 'pending',
+          submitted_at: now
         })
         .select()
         .single()
@@ -165,25 +218,9 @@ const gradeSubmission = async (req, res) => {
       return res.status(400).json({ message: 'Grade is required' })
     }
 
-    // Verify trainer owns the assignment connected to this submission
-    if (req.user.role === 'trainer') {
-      const { data: submission } = await supabase
-        .from('submissions')
-        .select('assignment_id')
-        .eq('id', id)
-        .single()
-
-      if (!submission) {
-        return res.status(404).json({ message: 'Submission not found' })
-      }
-
-      const { data: assignment } = await supabase
-        .from('assignments')
-        .select('trainer_id')
-        .eq('id', submission.assignment_id)
-        .single()
-
-      if (!assignment || assignment.trainer_id !== req.user.id) {
+      if (req.user.role === 'trainer') {
+      const hasAccess = await canTrainerAccessSubmission(req.user.id, id)
+      if (!hasAccess) {
         return res.status(403).json({ message: 'You are not authorized to grade this submission' })
       }
     }
@@ -194,7 +231,7 @@ const gradeSubmission = async (req, res) => {
         grade: Number(grade),
         feedback: feedback || '',
         status: 'graded',
-        graded_at: new Date()
+        graded_at: new Date().toISOString()
       })
       .eq('id', id)
       .select()

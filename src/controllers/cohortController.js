@@ -280,7 +280,63 @@ const enrollStudent = async (req, res) => {
   }
 }
 
+// ─────────────────────────────────────────────
+// UNASSIGN TRAINER FROM COHORT
+// ─────────────────────────────────────────────
+const unassignTrainer = async (req, res) => {
+  try {
+    const { id: cohortId } = req.params
+    const { trainerId } = req.body
+
+    if (!trainerId) {
+      return res.status(400).json({ message: 'Trainer ID is required' })
+    }
+
+    // Verify cohort exists
+    const { data: cohort, error: cohortError } = await supabase
+      .from('cohorts').select('id, name').eq('id', cohortId).single()
+    if (cohortError || !cohort) {
+      return res.status(404).json({ message: 'Cohort not found' })
+    }
+
+    // Verify trainer exists
+    const { data: trainer, error: trainerError } = await supabase
+      .from('users').select('id, first_name, last_name').eq('id', trainerId).single()
+    if (trainerError || !trainer) {
+      return res.status(404).json({ message: 'Trainer not found' })
+    }
+
+    // Remove from cohort_trainers table
+    const { error: deleteError } = await supabase
+      .from('cohort_trainers')
+      .delete()
+      .eq('cohort_id', cohortId)
+      .eq('trainer_id', trainerId)
+
+    // Attempt to clear trainer_id from cohorts table if the column exists.
+    // Some deployments use `cohort_trainers` join table instead of a column.
+    try {
+      await supabase
+        .from('cohorts')
+        .update({ trainer_id: null, updated_at: new Date() })
+        .eq('id', cohortId)
+    } catch (err) {
+      // Ignore errors such as missing column (42703) and continue
+      console.warn('Could not clear cohorts.trainer_id:', err.message)
+    }
+
+    res.json({
+      success: true,
+      message: `${trainer.first_name} ${trainer.last_name} unassigned from ${cohort.name}`,
+      cohortId,
+      trainerId
+    })
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to unassign trainer', error: error.message })
+  }
+}
+
 module.exports = {
   createCohort, getCohorts, getCohort, updateCohort, deleteCohort,
-  assignTrainer, enrollStudent
+  assignTrainer, unassignTrainer, enrollStudent
 }

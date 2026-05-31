@@ -2,28 +2,6 @@ const supabase = require('../config/supabase')
 
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000'
 
-const getTrainerCohortIds = async (trainerId) => {
-  const ids = new Set()
-
-  const { data: assignments, error: assignmentError } = await supabase
-    .from('cohort_trainers')
-    .select('cohort_id')
-    .eq('trainer_id', trainerId)
-
-  if (!assignmentError) {
-    ;(assignments || []).forEach(row => row.cohort_id && ids.add(row.cohort_id))
-  }
-
-  const { data: fallbackCohorts } = await supabase
-    .from('cohorts')
-    .select('id')
-    .eq('trainer_id', trainerId)
-
-  ;(fallbackCohorts || []).forEach(row => row.id && ids.add(row.id))
-
-  return [...ids]
-}
-
 const getCourses = async (req, res) => {
   try {
     const { status, cohort_id, trainer_id } = req.query
@@ -37,7 +15,6 @@ const getCourses = async (req, res) => {
     if (trainer_id) query = query.eq('trainer_id', trainer_id)
 
     if (req.user.role === 'trainer') {
-      const cohortIds = await getTrainerCohortIds(req.user.id)
       const { data: directCourses, error: directError } = await supabase
         .from('courses')
         .select('id')
@@ -46,11 +23,7 @@ const getCourses = async (req, res) => {
 
       const directCourseIds = (directCourses || []).map(course => course.id)
 
-      if (cohortIds.length > 0 && directCourseIds.length > 0) {
-        query = query.or(`cohort_id.in.(${cohortIds.join(',')}),id.in.(${directCourseIds.join(',')})`)
-      } else if (cohortIds.length > 0) {
-        query = query.in('cohort_id', cohortIds)
-      } else if (directCourseIds.length > 0) {
+      if (directCourseIds.length > 0) {
         query = query.in('id', directCourseIds)
       } else {
         query = query.eq('id', EMPTY_UUID)
@@ -90,11 +63,8 @@ const getCourse = async (req, res) => {
     }
     if (error) throw error
 
-    if (req.user.role === 'trainer') {
-      const cohortIds = await getTrainerCohortIds(req.user.id)
-      if (data.trainer_id !== req.user.id && !cohortIds.includes(data.cohort_id)) {
-        return res.status(403).json({ success: false, message: 'Forbidden' })
-      }
+    if (req.user.role === 'trainer' && data.trainer_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
     }
 
     res.json({ success: true, course: data })
@@ -201,28 +171,38 @@ const assignTrainerToCourse = async (req, res) => {
     const { id } = req.params
     const { trainerId } = req.body
 
-    if (!trainerId) {
+    if (trainerId === undefined) {
       return res.status(400).json({ message: 'Trainer ID is required' })
     }
 
-    const { data: trainer, error: trainerError } = await supabase
-      .from('users')
-      .select('id, first_name, last_name, role, status')
-      .eq('id', trainerId)
-      .single()
-    if (trainerError || !trainer) {
-      return res.status(404).json({ message: 'Trainer not found' })
-    }
-    if (trainer.role !== 'trainer') {
-      return res.status(400).json({ message: 'Selected user is not a trainer' })
-    }
-    if (trainer.status === 'inactive') {
-      return res.status(400).json({ message: 'Cannot assign an inactive trainer' })
+    let updateData = { updated_at: new Date() }
+    let message = 'Course trainer cleared successfully'
+
+    if (trainerId !== null && trainerId !== '') {
+      const { data: trainer, error: trainerError } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, role, status')
+        .eq('id', trainerId)
+        .single()
+      if (trainerError || !trainer) {
+        return res.status(404).json({ message: 'Trainer not found' })
+      }
+      if (trainer.role !== 'trainer') {
+        return res.status(400).json({ message: 'Selected user is not a trainer' })
+      }
+      if (trainer.status === 'inactive') {
+        return res.status(400).json({ message: 'Cannot assign an inactive trainer' })
+      }
+
+      updateData.trainer_id = trainerId
+      message = `${trainer.first_name} ${trainer.last_name} assigned to course`
+    } else {
+      updateData.trainer_id = null
     }
 
     const { data: course, error } = await supabase
       .from('courses')
-      .update({ trainer_id: trainerId, updated_at: new Date() })
+      .update(updateData)
       .eq('id', id)
       .select()
       .single()
@@ -232,15 +212,9 @@ const assignTrainerToCourse = async (req, res) => {
     }
     if (error) throw error
 
-    if (course.cohort_id) {
-      await supabase
-        .from('cohort_trainers')
-        .upsert({ cohort_id: course.cohort_id, trainer_id: trainerId }, { onConflict: 'cohort_id,trainer_id' })
-    }
-
     res.json({
       success: true,
-      message: `${trainer.first_name} ${trainer.last_name} assigned to ${course.name}`,
+      message,
       course
     })
   } catch (error) {
@@ -257,6 +231,34 @@ const deleteCourse = async (req, res) => {
 
     if (fetchError || !existing) {
       return res.status(404).json({ success: false, message: 'Course not found' })
+    }
+
+    const { data: assignmentIds, error: assignmentError } = await supabase
+      .from('assignments')
+      .select('id')
+      .eq('course_id', id)
+
+    if (assignmentError) throw assignmentError
+
+    const ids = (assignmentIds || []).map(record => record.id)
+    if (ids.length > 0) {
+      const { error: submissionsError } = await supabase
+        .from('submissions')
+        .delete()
+        .in('assignment_id', ids)
+      if (submissionsError) throw submissionsError
+    }
+
+    const deletions = [
+      supabase.from('sessions').delete().eq('course_id', id),
+      supabase.from('resources').delete().eq('course_id', id),
+      supabase.from('enrollments').delete().eq('course_id', id),
+      supabase.from('assignments').delete().eq('course_id', id)
+    ]
+
+    for (const deletion of deletions) {
+      const { error: deleteError } = await deletion
+      if (deleteError) throw deleteError
     }
 
     const { error } = await supabase.from('courses').delete().eq('id', id)
