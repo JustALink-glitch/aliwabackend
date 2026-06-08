@@ -39,6 +39,65 @@ const enrichSessions = async (sessions) => {
   }))
 }
 
+const triggerSessionStatusNotifications = async (session) => {
+  try {
+    const { status, title, course_id, trainer_id } = session
+    if (status === 'live') {
+      // 1. Notify trainer
+      if (trainer_id) {
+        await supabase.from('notifications').insert({
+          user_id: trainer_id,
+          title: 'Class Started',
+          message: `Your class "${title}" is now live.`,
+          type: 'session_started'
+        })
+      }
+      // 2. Notify students
+      const { data: enrolls } = await supabase
+        .from('enrollments')
+        .select('student_id')
+        .eq('course_id', course_id)
+
+      if (enrolls && enrolls.length > 0) {
+        const studentNotifs = enrolls.map(e => ({
+          user_id: e.student_id,
+          title: 'Class Started',
+          message: `The class "${title}" is now live. Click to join!`,
+          type: 'session_started'
+        }))
+        await supabase.from('notifications').insert(studentNotifs)
+      }
+    } else if (status === 'completed') {
+      // 1. Notify trainer
+      if (trainer_id) {
+        await supabase.from('notifications').insert({
+          user_id: trainer_id,
+          title: 'Class Completed',
+          message: `Your class "${title}" has ended. Attendance is being calculated.`,
+          type: 'session_ended'
+        })
+      }
+      // 2. Notify students
+      const { data: enrolls } = await supabase
+        .from('enrollments')
+        .select('student_id')
+        .eq('course_id', course_id)
+
+      if (enrolls && enrolls.length > 0) {
+        const studentNotifs = enrolls.map(e => ({
+          user_id: e.student_id,
+          title: 'Class Completed',
+          message: `The class "${title}" has ended. Thank you for attending.`,
+          type: 'session_ended'
+        }))
+        await supabase.from('notifications').insert(studentNotifs)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to trigger session status notifications:', err.message)
+  }
+}
+
 const getSessions = async (req, res) => {
   try {
     const { courseId, trainerId } = req.query
@@ -171,6 +230,10 @@ const createSession = async (req, res) => {
 
     if (error) throw error
 
+    if (session.status === 'live') {
+      await triggerSessionStatusNotifications(session)
+    }
+
     const [enriched] = await enrichSessions([session])
     res.status(201).json({
       success: true,
@@ -193,14 +256,18 @@ const updateSession = async (req, res) => {
       attendance_threshold_percentage
     } = req.body
 
-    if (req.user.role === 'trainer') {
-      const { data: existing } = await supabase
-        .from('sessions')
-        .select('trainer_id')
-        .eq('id', id)
-        .single()
+    const { data: existingSession, error: existingError } = await supabase
+      .from('sessions')
+      .select('trainer_id, status')
+      .eq('id', id)
+      .single()
 
-      if (!existing || existing.trainer_id !== req.user.id) {
+    if (existingError || !existingSession) {
+      return res.status(404).json({ message: 'Session not found' })
+    }
+
+    if (req.user.role === 'trainer') {
+      if (existingSession.trainer_id !== req.user.id) {
         return res.status(403).json({ message: 'You are not authorized to update this session' })
       }
     }
@@ -226,6 +293,10 @@ const updateSession = async (req, res) => {
       .single()
 
     if (error) throw error
+
+    if (status !== undefined && status !== existingSession.status) {
+      await triggerSessionStatusNotifications(session)
+    }
 
     const [enriched] = await enrichSessions([session])
     res.json({

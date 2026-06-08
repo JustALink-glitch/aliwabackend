@@ -191,6 +191,17 @@ const handleWebhook = async (req, res) => {
     if (event === 'meeting.ended') {
       console.log(`🏁 Meeting ${meetingId} ended. Triggering automatic attendance calculations...`)
 
+      const { error: sessionUpdateError } = await supabase
+        .from('sessions')
+        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('zoom_meeting_id', meetingId)
+
+      if (sessionUpdateError) {
+        console.error('❌ Failed to mark session completed:', sessionUpdateError.message)
+      } else {
+        console.log(`✅ Session status marked completed for meeting ${meetingId}.`)
+      }
+
       // Resolve open session segments that didn't get a participant_left webhook (e.g. abrupt disconnect)
       const endTime = new Date().toISOString()
       const { data: openSessions } = await supabase

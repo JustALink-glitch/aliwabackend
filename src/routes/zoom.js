@@ -1,6 +1,6 @@
 const express = require('express')
 const router = express.Router()
-const { initiateOAuth, handleOAuthCallback, getSignature, getOBFToken, checkZoomStatus } = require('../controllers/zoomOAuthController')
+const { initiateOAuth, handleOAuthCallback, getSignature, getOBFToken, checkZoomStatus, disconnectZoom } = require('../controllers/zoomOAuthController')
 const { authenticate } = require('../middleware/auth')
 
 /**
@@ -21,6 +21,13 @@ router.get('/callback', handleOAuthCallback)
  * Protected: requires valid application JWT.
  */
 router.get('/status', authenticate, checkZoomStatus)
+
+/**
+ * POST /api/zoom/disconnect
+ * Disconnects/deletes Zoom authorization tokens for the user.
+ * Protected: requires valid application JWT.
+ */
+router.post('/disconnect', authenticate, disconnectZoom)
 
 /**
  * GET /api/zoom/signature

@@ -148,7 +148,67 @@ const getUsers = async (req, res) => {
     const { data, error } = await query
     if (error) throw error
 
-    res.json({ success: true, users: data })
+    const userIds = (data || []).map(u => u.id)
+    
+    // Fetch enrollments and courses using separate queries (avoids relying on Supabase FK joins)
+    let enrollmentsMap = new Map()
+    let coursesMap = new Map()
+
+    if (userIds.length) {
+      // Step 1: fetch student enrollments (course_id + student_id)
+      const { data: enrollmentsData } = await supabase
+        .from('enrollments')
+        .select('student_id, course_id')
+        .in('student_id', userIds)
+
+      if (enrollmentsData && enrollmentsData.length > 0) {
+        const courseIds = [...new Set(enrollmentsData.map(e => e.course_id).filter(Boolean))]
+        // Step 2: fetch course names for those course IDs
+        const { data: courseNamesData } = await supabase
+          .from('courses')
+          .select('id, name')
+          .in('id', courseIds)
+
+        const courseNamesById = new Map((courseNamesData || []).map(c => [c.id, c.name]))
+
+        enrollmentsData.forEach(e => {
+          if (e.course_id && courseNamesById.has(e.course_id)) {
+            enrollmentsMap.set(e.student_id, courseNamesById.get(e.course_id))
+          }
+        })
+      }
+
+      // Trainer courses: direct lookup by trainer_id
+      const { data: trainerCoursesData } = await supabase
+        .from('courses')
+        .select('trainer_id, name')
+        .in('trainer_id', userIds)
+
+      ;(trainerCoursesData || []).forEach(c => {
+        if (c.name && c.trainer_id) {
+          const list = coursesMap.get(c.trainer_id) || []
+          list.push(c.name)
+          coursesMap.set(c.trainer_id, list)
+        }
+      })
+    }
+
+    const usersWithCourses = (data || []).map(user => {
+      let courseName = 'General Curriculum'
+      if (user.role === 'student') {
+        courseName = enrollmentsMap.get(user.id) || 'General Curriculum'
+      } else if (user.role === 'trainer') {
+        const list = coursesMap.get(user.id)
+        courseName = list && list.length > 0 ? list.join(', ') : 'General Curriculum'
+      }
+      
+      return {
+        ...user,
+        course: courseName
+      }
+    })
+
+    res.json({ success: true, users: usersWithCourses })
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to get users', error: error.message })
   }
@@ -170,11 +230,47 @@ const getUser = async (req, res) => {
       return res.status(404).json({ message: 'User not found' })
     }
 
-    res.json({ user: data })
+    let courseName = 'General Curriculum'
+
+    if (data.role === 'student') {
+      // Fetch enrollment + course name separately
+      const { data: enrollmentsData } = await supabase
+        .from('enrollments')
+        .select('course_id')
+        .eq('student_id', id)
+        .limit(1)
+
+      if (enrollmentsData && enrollmentsData.length > 0 && enrollmentsData[0].course_id) {
+        const { data: courseData } = await supabase
+          .from('courses')
+          .select('name')
+          .eq('id', enrollmentsData[0].course_id)
+          .single()
+        if (courseData) courseName = courseData.name
+      }
+    } else if (data.role === 'trainer') {
+      // Fetch trainer's courses separately
+      const { data: trainerCourses } = await supabase
+        .from('courses')
+        .select('name')
+        .eq('trainer_id', id)
+
+      if (trainerCourses && trainerCourses.length > 0) {
+        courseName = trainerCourses.map(c => c.name).join(', ')
+      }
+    }
+
+    const userWithCourse = {
+      ...data,
+      course: courseName
+    }
+
+    res.json({ user: userWithCourse })
   } catch (error) {
     res.status(500).json({ message: 'Failed to get user', error: error.message })
   }
 }
+
 
 // ─────────────────────────────────────────────
 // INVITE TRAINER
@@ -455,6 +551,21 @@ const updateUser = async (req, res) => {
 
     if (error) throw error
     await syncRoleProfile(data)
+
+    try {
+      const message = updateData.first_name || updateData.last_name
+        ? `Your name has been updated to ${data.first_name} ${data.last_name}.`
+        : 'Your profile information was updated successfully.'
+
+      await supabase.from('notifications').insert({
+        user_id: data.id,
+        title: 'Profile Updated',
+        message,
+        type: 'profile_update'
+      })
+    } catch (notificationError) {
+      console.error('Failed to create profile update notification:', notificationError)
+    }
 
     res.json({
       success: true,

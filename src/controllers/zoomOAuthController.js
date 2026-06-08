@@ -1,5 +1,6 @@
 const axios = require('axios')
 const { storeOAuthTokens, generateSDKSignature, refreshAccessToken, getStoredTokens } = require('../utils/zoomTokens')
+const supabase = require('../config/supabase')
 
 /**
  * Initiates Zoom OAuth flow by redirecting the user to Zoom
@@ -21,7 +22,7 @@ const initiateOAuth = (req, res) => {
     return res.status(500).json({ error: 'OAuth credentials not configured.' })
   }
 
-  const zoomAuthUrl = `https://zoom.us/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('meeting:write:meeting meeting:write:meeting:admin')}&prompt=consent&state=${userId}`
+  const zoomAuthUrl = `https://zoom.us/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('meeting:write:meeting meeting:write:meeting:admin')}&prompt=login&state=${userId}`
   console.log(`🔗 Redirecting user to Zoom OAuth: ${zoomAuthUrl}`)
   res.redirect(zoomAuthUrl)
 }
@@ -79,6 +80,17 @@ const handleOAuthCallback = async (req, res) => {
       expiresIn: expires_in
     })
 
+    try {
+      await supabase.from('notifications').insert({
+        user_id: userId,
+        title: 'Zoom Connected',
+        message: 'Your Zoom account has been successfully connected for auto-scheduling classes.',
+        type: 'zoom_connected'
+      })
+    } catch (notifErr) {
+      console.error('Failed to create Zoom connected notification:', notifErr.message)
+    }
+
     console.log(`✅ Zoom OAuth flow completed successfully for user ${userId}.`)
 
     // Redirect to frontend dashboards
@@ -110,7 +122,8 @@ const getSignature = (req, res) => {
   try {
     const signature = generateSDKSignature(meetingNumber, meetingRole)
     console.log(`🔑 Generated SDK Signature for meeting ${meetingNumber}, role ${meetingRole}`)
-    return res.json({ signature })
+    const sdkKey = process.env.ZOOM_SDK_KEY || process.env.ZOOM_OAUTH_CLIENT_ID
+    return res.json({ signature, sdkKey })
   } catch (error) {
     console.error('❌ Failed to generate Zoom SDK Signature:', error.message)
     return res.status(500).json({ error: 'Failed to generate Zoom Meeting SDK signature.' })
@@ -175,10 +188,50 @@ const checkZoomStatus = async (req, res) => {
   }
 }
 
+/**
+ * Disconnects the Zoom integration by deleting tokens.
+ *
+ * POST /api/zoom/disconnect
+ */
+const disconnectZoom = async (req, res) => {
+  const userId = req.user?.id
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required to disconnect Zoom.' })
+  }
+
+  try {
+    const { error } = await supabase
+      .from('zoom_oauth_tokens')
+      .delete()
+      .eq('user_id', userId)
+
+    if (error) throw error
+
+    try {
+      await supabase.from('notifications').insert({
+        user_id: userId,
+        title: 'Zoom Disconnected',
+        message: 'Your Zoom account has been disconnected. Live sessions will now require manual links.',
+        type: 'zoom_disconnected'
+      })
+    } catch (notifErr) {
+      console.error('Failed to create Zoom disconnected notification:', notifErr.message)
+    }
+
+    console.log(`✅ Zoom disconnected successfully for user ${userId}.`)
+    return res.json({ success: true, message: 'Zoom disconnected successfully.' })
+  } catch (error) {
+    console.error('❌ Failed to disconnect Zoom:', error.message)
+    return res.status(500).json({ error: 'Failed to disconnect Zoom account.' })
+  }
+}
+
 module.exports = {
   initiateOAuth,
   handleOAuthCallback,
   getSignature,
   getOBFToken,
-  checkZoomStatus
+  checkZoomStatus,
+  disconnectZoom
 }

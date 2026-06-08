@@ -119,6 +119,32 @@ const refreshAccessToken = async (userId) => {
     return access_token
   } catch (error) {
     console.error('❌ Failed to refresh Zoom OAuth token:', error.response?.data || error.message)
+    
+    // Check if the token is invalid/revoked (e.g. invalid_grant error from Zoom)
+    const errorData = error.response?.data || {}
+    if (
+      errorData.error === 'invalid_grant' ||
+      (typeof errorData.reason === 'string' && errorData.reason.toLowerCase().includes('token'))
+    ) {
+      console.log(`⚠️ Zoom OAuth token is invalid or has been revoked for user ${userId}. Deleting from DB...`)
+      try {
+        await supabase
+          .from('zoom_oauth_tokens')
+          .delete()
+          .eq('user_id', userId)
+        console.log(`✅ Cleared invalid Zoom OAuth tokens from DB for user ${userId}.`)
+        
+        await supabase.from('notifications').insert({
+          user_id: userId,
+          title: 'Zoom Disconnected',
+          message: 'Your Zoom integration was disconnected because the credentials expired or were revoked. Please re-authorize.',
+          type: 'zoom_disconnected'
+        })
+      } catch (dbErr) {
+        console.error(`❌ Failed to clear invalid Zoom OAuth tokens from DB for user ${userId}:`, dbErr.message)
+      }
+    }
+
     throw new Error('Zoom authentication refresh failed. Please re-authorize Zoom.')
   }
 }

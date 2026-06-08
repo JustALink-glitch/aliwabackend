@@ -98,13 +98,15 @@ const register = async (req, res) => {
 // ─────────────────────────────────────────────
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body
+    const email = req.body.email?.trim()
+    const password = req.body.password
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' })
     }
 
     const { data: user, error } = await supabase
-      .from('users').select('*').eq('email', email).single()
+      .from('users').select('*').ilike('email', email)
+      .single()
     if (error || !user) {
       return res.status(401).json({ message: 'Invalid email or password' })
     }
@@ -143,7 +145,9 @@ const login = async (req, res) => {
 // ─────────────────────────────────────────────
 const setPassword = async (req, res) => {
   try {
-    const { email, tempPassword, newPassword } = req.body
+    const email = req.body.email?.trim()
+    const tempPassword = req.body.tempPassword?.trim()
+    const newPassword = req.body.newPassword
     if (!email || !tempPassword || !newPassword) {
       return res.status(400).json({ message: 'All fields are required' })
     }
@@ -153,7 +157,8 @@ const setPassword = async (req, res) => {
     }
 
     const { data: user, error } = await supabase
-      .from('users').select('*').eq('email', email).single()
+      .from('users').select('*').ilike('email', email)
+      .single()
     if (error || !user) {
       return res.status(404).json({ message: 'User not found' })
     }
@@ -231,13 +236,13 @@ const getMe = async (req, res) => {
 // ─────────────────────────────────────────────
 const forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body
+    const email = req.body.email?.trim()
     if (!email) {
       return res.status(400).json({ message: 'Email is required' })
     }
 
     const { data: user } = await supabase
-      .from('users').select('id, email, first_name').eq('email', email).single()
+      .from('users').select('id, email, first_name').ilike('email', email).single()
 
     // Always return same message to prevent email enumeration
     if (!user) {
@@ -279,13 +284,14 @@ const forgotPassword = async (req, res) => {
 // ─────────────────────────────────────────────
 const verifyOtp = async (req, res) => {
   try {
-    const { email, otp } = req.body
+    const email = req.body.email?.trim()
+    const { otp } = req.body
     if (!email || !otp) {
       return res.status(400).json({ message: 'Email and OTP are required' })
     }
 
     const { data: user } = await supabase
-      .from('users').select('id, email').eq('email', email).single()
+      .from('users').select('id, email').ilike('email', email).single()
     if (!user) {
       return res.status(400).json({ message: 'Invalid or expired code' })
     }
@@ -321,7 +327,8 @@ const verifyOtp = async (req, res) => {
 // ─────────────────────────────────────────────
 const resetPassword = async (req, res) => {
   try {
-    const { email, otp, newPassword } = req.body
+    const email = req.body.email?.trim()
+    const { otp, newPassword } = req.body
     if (!email || !otp || !newPassword) {
       return res.status(400).json({ message: 'All fields are required' })
     }
@@ -331,7 +338,7 @@ const resetPassword = async (req, res) => {
     }
 
     const { data: user } = await supabase
-      .from('users').select('id, email, first_name, role').eq('email', email).single()
+      .from('users').select('id, email, first_name, role').ilike('email', email).single()
     if (!user) {
       return res.status(400).json({ message: 'Invalid request' })
     }

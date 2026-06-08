@@ -76,6 +76,7 @@ app.use('/api/submissions', require('./routes/submissions'))
 app.use('/api/sessions', require('./routes/sessions'))
 app.use('/api/attendance', require('./routes/attendance'))
 app.use('/api/resources', require('./routes/resources'))
+app.use('/api/notifications', require('./routes/notifications'))
 app.use('/api/zoom-webhook', require('./routes/zoom-webhook'))
 app.use('/api/zoom', require('./routes/zoom'))
 
