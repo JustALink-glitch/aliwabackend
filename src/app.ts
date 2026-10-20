@@ -14,6 +14,7 @@ import { invitationRoutes } from './routes/invitations.js'
 import { meRoutes } from './routes/me.js'
 import { memberRoutes } from './routes/members.js'
 import { organisationRoutes } from './routes/organisations.js'
+import { passwordResetRoutes } from './routes/password-reset.js'
 
 export interface AppDeps {
   corsOrigins: string[]
@@ -50,9 +51,10 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (c) => c.json({ status: 'ok' }))
 
-  // Each router applies its own auth. Public: invitations. Signed in, no organisation yet:
+  // Each router applies its own auth. Public: invitations, password reset. Signed in, no organisation yet:
   // organisations. Everything else requires an active membership.
   app.route('/v1/invitations', invitationRoutes(deps))
+  app.route('/v1/auth/password-reset', passwordResetRoutes(deps))
   app.route('/v1/organisations', organisationRoutes(deps))
   app.route('/v1/me', meRoutes(deps))
   app.route('/v1/members', memberRoutes(deps))

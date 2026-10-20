@@ -8,6 +8,7 @@ import type { EmailMessage, Mailer } from '../../src/lib/mailer.js'
 export function fakeAuthAdmin(sql: Sql) {
   const passwords = new Map<string, string>()
   const deleted: string[] = []
+  const recoveryLinks: { email: string; redirectTo: string }[] = []
   const admin: AuthAdmin = {
     async findUserIdByEmail(email) {
       const [row] = await sql<{ id: string }[]>`select id from auth.users where lower(email) = ${email.toLowerCase()}`
@@ -28,8 +29,14 @@ export function fakeAuthAdmin(sql: Sql) {
       deleted.push(userId)
       await sql`delete from auth.users where id = ${userId}`
     },
+    async generateRecoveryLink(email, redirectTo) {
+      const [row] = await sql`select id from auth.users where lower(email) = ${email.toLowerCase()}`
+      if (!row) return null
+      recoveryLinks.push({ email, redirectTo })
+      return `https://auth.example/verify?type=recovery&token=fake&redirect_to=${encodeURIComponent(redirectTo)}`
+    },
   }
-  return { admin, passwords, deleted }
+  return { admin, passwords, deleted, recoveryLinks }
 }
 
 export function fakeMailer() {

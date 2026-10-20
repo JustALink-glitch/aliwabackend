@@ -25,6 +25,7 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
+| `POST` | `/v1/auth/password-reset` | Anyone | S1.01 — emails a 1-hour reset link; same answer whether or not the email exists |
 
 ## How access works
 

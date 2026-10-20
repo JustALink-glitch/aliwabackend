@@ -11,6 +11,8 @@ export interface AuthAdmin {
   createUser(input: { email: string; password: string; name: string }): Promise<CreateUserResult>
   setPassword(userId: string, password: string): Promise<{ ok: true } | { ok: false; reason: 'weak_password' }>
   deleteUser(userId: string): Promise<void>
+  /** A one-time password-reset link (valid 1 hour), or null if no account uses this email. Sends nothing. */
+  generateRecoveryLink(email: string, redirectTo: string): Promise<string | null>
 }
 
 export function createSupabaseAuthAdmin(supabase: SupabaseClient, sql: Sql): AuthAdmin {
@@ -50,6 +52,19 @@ export function createSupabaseAuthAdmin(supabase: SupabaseClient, sql: Sql): Aut
     async deleteUser(userId) {
       const { error } = await supabase.auth.admin.deleteUser(userId)
       if (error) throw error
+    },
+
+    async generateRecoveryLink(email, redirectTo) {
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        options: { redirectTo },
+      })
+      if (error) {
+        if (error.code === 'user_not_found' || error.status === 404) return null
+        throw error
+      }
+      return data.properties.action_link
     },
   }
 }

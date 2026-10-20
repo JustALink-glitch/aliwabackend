@@ -41,8 +41,26 @@ const escapeHtml = (value: string) =>
  * The shared transactional template (§07): title, intro, one primary button, note.
  * Final visual design follows the X2 email frames.
  */
-export function renderEmail(input: { title: string; intro: string; buttonLabel: string; buttonUrl: string; note?: string }) {
-  const text = [input.title, '', input.intro, '', `${input.buttonLabel}: ${input.buttonUrl}`, input.note ? `\n${input.note}` : '']
+export function renderEmail(input: {
+  title: string
+  intro: string
+  buttonLabel: string
+  buttonUrl: string
+  note?: string
+  /** "Button not working? Paste this into your browser: …" */
+  showLinkFallback?: boolean
+  /** Small print under the card. */
+  footer?: string
+}) {
+  const text = [
+    input.title,
+    '',
+    input.intro,
+    '',
+    `${input.buttonLabel}: ${input.buttonUrl}`,
+    input.note ? `\n${input.note}` : '',
+    input.footer ? `\n${input.footer}` : '',
+  ]
     .join('\n')
     .trim()
 
@@ -58,7 +76,9 @@ export function renderEmail(input: { title: string; intro: string; buttonLabel: 
           <a href="${escapeHtml(input.buttonUrl)}" style="display:inline-block;background:#2563EB;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:600;padding:10px 16px;border-radius:8px">${escapeHtml(input.buttonLabel)}</a>
         </td></tr>
         ${input.note ? `<tr><td style="font-size:12px;line-height:16px;color:#76808D">${escapeHtml(input.note)}</td></tr>` : ''}
+        ${input.showLinkFallback ? `<tr><td style="font-size:12px;line-height:16px;color:#76808D;padding-top:16px;word-break:break-all">Button not working? Paste this into your browser: ${escapeHtml(input.buttonUrl)}</td></tr>` : ''}
       </table>
+      ${input.footer ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px"><tr><td style="font-size:12px;line-height:16px;color:#76808D;padding:16px 4px 0">${escapeHtml(input.footer)}</td></tr></table>` : ''}
     </td></tr>
   </table>
 </body></html>`
