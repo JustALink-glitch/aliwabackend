@@ -18,7 +18,11 @@ export interface Membership {
 export type AuthContext = Identity & Membership
 
 export type VerifyToken = (token: string) => Promise<Identity | null>
-export type LoadMembership = (userId: string) => Promise<Membership | null>
+/** Why there is no access: never joined any organisation, or access was ended by an admin. */
+export type NoMembership = { reason: 'no_organisation' | 'access_ended' }
+export type LoadMembership = (userId: string) => Promise<Membership | NoMembership>
+
+export const isMembership = (value: Membership | NoMembership): value is Membership => 'memberId' in value
 
 /**
  * Verifies Supabase Auth access tokens locally against the project's published
@@ -42,15 +46,16 @@ export function createTokenVerifier(supabaseUrl: string): VerifyToken {
   }
 }
 
-/** Looks up the active membership for a user. Deactivated or invited members get no access. */
+/** Looks up the user's membership. Only an active member gets access. */
 export function createMembershipLoader(sql: Sql): LoadMembership {
   return async (userId) => {
-    const [row] = await sql<{ id: string; organisation_id: string; role: string }[]>`
-      select id, organisation_id, role
+    const [row] = await sql<{ id: string; organisation_id: string; role: string; status: string }[]>`
+      select id, organisation_id, role, status
       from public.organisation_members
-      where user_id = ${userId} and status = 'active'
+      where user_id = ${userId}
     `
-    if (!row || !isRole(row.role)) return null
+    if (!row) return { reason: 'no_organisation' }
+    if (row.status !== 'active' || !isRole(row.role)) return { reason: 'access_ended' }
     return { memberId: row.id, organisationId: row.organisation_id, role: row.role }
   }
 }

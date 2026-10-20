@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import type { AuthContext, Identity, LoadMembership, VerifyToken } from '../lib/auth.js'
-import { forbidden, unauthorized } from '../lib/errors.js'
+import { isMembership, type AuthContext, type Identity, type LoadMembership, type VerifyToken } from '../lib/auth.js'
+import { AppError, forbidden, unauthorized } from '../lib/errors.js'
 import type { Role } from '../lib/roles.js'
 
 export type IdentityVariables = { identity: Identity }
@@ -36,7 +36,12 @@ export function requireAuth(deps: { verifyToken: VerifyToken; loadMembership: Lo
   return createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     const identity = await verifyBearer(c, deps.verifyToken)
     const membership = await deps.loadMembership(identity.userId)
-    if (!membership) throw forbidden('This account is not active in any organisation.')
+    if (!isMembership(membership)) {
+      // The frontend uses the code: resume organisation set-up (R1.03a) or show "access ended" (P1.04w).
+      throw membership.reason === 'no_organisation'
+        ? new AppError(403, 'no_organisation', 'This account has not set up or joined an organisation yet.')
+        : new AppError(403, 'access_ended', 'Your access to this organisation has ended. Contact your administrator.')
+    }
     c.set('identity', identity)
     c.set('auth', { ...identity, ...membership })
     await next()

@@ -3,13 +3,12 @@ import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, isPg, PG } from '../lib/db.js'
 import { AppError, badRequest } from '../lib/errors.js'
-import { parseBody, personName, timeZone } from '../lib/validation.js'
+import { fullName, parseBody, timeZone } from '../lib/validation.js'
 import { requireIdentity, type IdentityVariables } from '../middleware/auth.js'
 
 const CreateOrganisation = z.object({
   organisationName: z.string().trim().min(1, 'Required.').max(120),
-  firstName: personName,
-  lastName: personName,
+  fullName,
   timeZone: timeZone.default('Africa/Lagos'),
 })
 
@@ -46,7 +45,7 @@ export function organisationRoutes(deps: AppDeps) {
             insert into public.organisation_members
               (organisation_id, user_id, email, first_name, last_name, role, status, joined_at)
             values
-              (${organisation!.id}, ${userId}, ${normalisedEmail}, ${body.firstName}, ${body.lastName},
+              (${organisation!.id}, ${userId}, ${normalisedEmail}, ${body.fullName.firstName}, ${body.fullName.lastName},
                'owner', 'active', now())
             returning id
           `

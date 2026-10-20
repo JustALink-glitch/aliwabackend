@@ -32,24 +32,24 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
 
   describe('organisation sign-up (R1)', () => {
     it('requires a signed-in user', async () => {
-      const res = await req('POST', '/v1/organisations', { body: { organisationName: 'X', firstName: 'A', lastName: 'B' } })
+      const res = await req('POST', '/v1/organisations', { body: { organisationName: 'X', fullName: 'A B' } })
       expect(res.status).toBe(401)
     })
 
     it('validates fields', async () => {
       const res = await req('POST', '/v1/organisations', {
         token: ownerToken,
-        body: { organisationName: '', firstName: 'Ada', lastName: 'Obi', timeZone: 'Mars/Olympus' },
+        body: { organisationName: '', fullName: 'Ada', timeZone: 'Mars/Olympus' },
       })
       expect(res.status).toBe(400)
       const fields = (res.body.error!.details as { field: string }[]).map((d) => d.field)
-      expect(fields).toEqual(expect.arrayContaining(['organisationName', 'timeZone']))
+      expect(fields).toEqual(expect.arrayContaining(['organisationName', 'fullName', 'timeZone']))
     })
 
     it('creates the organisation with the caller as owner', async () => {
       const res = await req('POST', '/v1/organisations', {
         token: ownerToken,
-        body: { organisationName: 'ALIWA Foundation', firstName: 'Ada', lastName: 'Obi' },
+        body: { organisationName: 'ALIWA Foundation', fullName: '  Ada  Chioma   Obi ' },
       })
       expect(res.status).toBe(201)
       expect(res.body).toMatchObject({
@@ -61,6 +61,9 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
       expect(me.status).toBe(200)
       expect(me.body).toMatchObject({ membership: { role: 'owner' }, organisation: { name: 'ALIWA Foundation' } })
 
+      const [owner] = await sql`select first_name, last_name from organisation_members where email = ${ada.email}`
+      expect(owner).toEqual({ first_name: 'Ada Chioma', last_name: 'Obi' })
+
       const [settings] = await sql`select zoom_present_min_pct from organisation_settings`
       expect(settings).toBeDefined()
       const [event] = await sql`select action from audit_events where action = 'organisation.created'`
@@ -70,7 +73,7 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
     it('allows one organisation per account', async () => {
       const res = await req('POST', '/v1/organisations', {
         token: ownerToken,
-        body: { organisationName: 'Second', firstName: 'Ada', lastName: 'Obi' },
+        body: { organisationName: 'Second', fullName: 'Ada Obi' },
       })
       expect(res.status).toBe(409)
       expect(res.body.error!.code).toBe('already_member')
@@ -79,7 +82,7 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
     it('lets a second, unrelated organisation sign up', async () => {
       const res = await req('POST', '/v1/organisations', {
         token: otherOwnerToken,
-        body: { organisationName: 'Other Org', firstName: 'Kofi', lastName: 'A', timeZone: 'Africa/Accra' },
+        body: { organisationName: 'Other Org', fullName: 'Kofi Annan', timeZone: 'Africa/Accra' },
       })
       expect(res.status).toBe(201)
     })
@@ -132,7 +135,14 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
       const res = await req('GET', `/v1/invitations/${t.mail.lastToken('bisi@aliwa.org')}`)
       expect(res.status).toBe(200)
       expect(res.body).toMatchObject({
-        invitation: { email: 'bisi@aliwa.org', firstName: 'Bisi', role: 'trainer', organisationName: 'ALIWA Foundation' },
+        invitation: {
+          state: 'valid',
+          email: 'bisi@aliwa.org',
+          firstName: 'Bisi',
+          role: 'trainer',
+          organisationName: 'ALIWA Foundation',
+          invitedBy: 'Ada Chioma O.',
+        },
       })
     })
 
@@ -150,14 +160,17 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
 
     it('joins the organisation on accept', async () => {
       const token = t.mail.lastToken('bisi@aliwa.org')
-      const res = await req('POST', `/v1/invitations/${token}/accept`, { body: { password: 'a-long-password' } })
+      const res = await req('POST', `/v1/invitations/${token}/accept`, {
+        body: { password: 'a-long-password', fullName: 'Bisola Tade' },
+      })
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ email: 'bisi@aliwa.org' })
 
-      const [member] = await sql<{ status: string; user_id: string }[]>`
-        select status, user_id from organisation_members where email = 'bisi@aliwa.org'
+      const [member] = await sql<{ status: string; user_id: string; first_name: string }[]>`
+        select status, user_id, first_name from organisation_members where email = 'bisi@aliwa.org'
       `
       expect(member!.status).toBe('active')
+      expect(member!.first_name).toBe('Bisola')
       trainerToken = as(member!.user_id, 'bisi@aliwa.org')
       const me = await req('GET', '/v1/me', { token: trainerToken })
       expect(me.body).toMatchObject({ membership: { role: 'trainer' }, organisation: { name: 'ALIWA Foundation' } })
@@ -210,8 +223,10 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
       const second = t.mail.lastToken('tunde@aliwa.org')
       expect(second).not.toBe(first)
 
-      expect((await req('GET', `/v1/invitations/${first}`)).body.error!.code).toBe('invitation_invalid')
-      expect((await req('GET', `/v1/invitations/${second}`)).status).toBe(200)
+      expect((await req('GET', `/v1/invitations/${first}`)).body).toMatchObject({ invitation: { state: 'replaced' } })
+      const accept = await req('POST', `/v1/invitations/${first}/accept`, { body: { password: 'a-long-password' } })
+      expect(accept.body.error!.code).toBe('invitation_replaced')
+      expect((await req('GET', `/v1/invitations/${second}`)).body).toMatchObject({ invitation: { state: 'valid' } })
     })
 
     it('another organisation cannot see or resend it', async () => {
@@ -228,16 +243,29 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
 
       clock = new Date(clock.getTime() + 73 * 3600 * 1000)
       const view = await req('GET', `/v1/invitations/${token}`)
-      expect(view.status).toBe(410)
-      expect(view.body.error!.code).toBe('invitation_expired')
+      expect(view.status).toBe(200)
+      expect(view.body).toMatchObject({ invitation: { state: 'expired', invitedBy: 'Ada Chioma O.' } })
       expect((await req('POST', `/v1/invitations/${token}/accept`, { body: { password: 'a-long-password' } })).status).toBe(410)
 
       const renew = await req('POST', `/v1/invitations/${token}/renew`)
       expect(renew.status).toBe(200)
+      expect(renew.body).toMatchObject({ sent: true, email: 'tunde@aliwa.org' })
       const fresh = t.mail.lastToken('tunde@aliwa.org')
       expect(fresh).not.toBe(token)
-      expect((await req('GET', `/v1/invitations/${fresh}`)).status).toBe(200)
-      expect((await req('POST', `/v1/invitations/${token}/renew`)).status).toBe(404) // old link now revoked
+      expect((await req('GET', `/v1/invitations/${fresh}`)).body).toMatchObject({ invitation: { state: 'valid' } })
+
+      // "Resend email" from the sent screen still uses the old link: allowed, but not more than once a minute.
+      expect((await req('POST', `/v1/invitations/${token}/renew`)).status).toBe(429)
+      clock = new Date(clock.getTime() + 61 * 1000)
+      expect((await req('POST', `/v1/invitations/${token}/renew`)).status).toBe(200)
+
+      // The admin who invited them is told.
+      const notes = await sql`
+        select n.title from notifications n join organisation_members m on m.id = n.recipient_member_id
+        where m.email = ${ada.email} and n.event = 'invitation_renewal_requested'
+      `
+      expect(notes).toHaveLength(2)
+      expect(notes[0]!.title).toBe('Tunde B asked for a new invitation link')
     })
 
     it('lists members with invitation state', async () => {
@@ -252,6 +280,27 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
       const [bisi] = await sql<{ id: string }[]>`select id from organisation_members where email = 'bisi@aliwa.org'`
       const res = await req('POST', `/v1/members/${bisi!.id}/invitation`, { token: ownerToken })
       expect(res.status).toBe(409)
+    })
+  })
+
+  describe('signing in without access', () => {
+    it('tells a new account to set up its organisation', async () => {
+      const userId = randomUUID()
+      await sql`insert into auth.users (id, email) values (${userId}, 'new@founder.org')`
+      const me = await req('GET', '/v1/me', { token: as(userId, 'new@founder.org') })
+      expect(me.status).toBe(403)
+      expect(me.body.error!.code).toBe('no_organisation')
+    })
+
+    it('tells a deactivated member their access has ended', async () => {
+      const [bisi] = await sql<{ user_id: string }[]>`
+        update organisation_members set status = 'deactivated', deactivated_at = now()
+        where email = 'bisi@aliwa.org' returning user_id
+      `
+      const me = await req('GET', '/v1/me', { token: as(bisi!.user_id, 'bisi@aliwa.org') })
+      expect(me.status).toBe(403)
+      expect(me.body.error!.code).toBe('access_ended')
+      await sql`update organisation_members set status = 'active', deactivated_at = null where email = 'bisi@aliwa.org'`
     })
   })
 
@@ -287,7 +336,8 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
       }
       const res = await req('POST', `/v1/invitations/${token}/accept`, { body: { password: 'a-long-password' } })
       t.auth.admin.createUser = realCreate
-      expect(res.status).toBe(404)
+      expect(res.status).toBe(410)
+      expect(res.body.error!.code).toBe('invitation_replaced')
       expect(t.auth.deleted).toHaveLength(1)
       const [user] = await sql`select 1 from auth.users where email = 'race@aliwa.org'`
       expect(user).toBeUndefined()

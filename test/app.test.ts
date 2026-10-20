@@ -49,9 +49,12 @@ describe('authentication', () => {
     expect(res.status).toBe(401)
   })
 
-  it('rejects a valid user with no active membership', async () => {
-    const res = await makeApp({ loadMembership: async () => null }).request('/v1/me', bearer('good'))
-    expect(res.status).toBe(403)
+  it('rejects a valid user with no active membership, saying why', async () => {
+    const none = await makeApp({ loadMembership: async () => ({ reason: 'no_organisation' }) }).request('/v1/me', bearer('good'))
+    expect(none.status).toBe(403)
+    expect((await json(none)).error.code).toBe('no_organisation')
+    const ended = await makeApp({ loadMembership: async () => ({ reason: 'access_ended' }) }).request('/v1/me', bearer('good'))
+    expect((await json(ended)).error.code).toBe('access_ended')
   })
 
   it('returns the user, organisation and role from the server, not the request', async () => {

@@ -25,6 +25,26 @@ export const email = z
 
 export const personName = z.string().trim().min(1, 'Required.').max(80)
 
+/**
+ * One "Full name" field (R1.01, T1.01), stored as first + last name.
+ * The last word is the last name; everything before it is the first name.
+ */
+export const fullName = z
+  .string()
+  .trim()
+  .transform((value) => value.replace(/\s+/g, ' '))
+  .pipe(
+    z
+      .string()
+      .min(1, 'Enter your full name.')
+      .max(160)
+      .refine((value) => value.includes(' '), 'Enter your first and last name.'),
+  )
+  .transform((value) => {
+    const cut = value.lastIndexOf(' ')
+    return { firstName: value.slice(0, cut).slice(0, 80), lastName: value.slice(cut + 1).slice(0, 80) }
+  })
+
 /** Proposal (§12): minimum 10 characters. Bcrypt ignores bytes after 72. */
 export const password = z
   .string()
