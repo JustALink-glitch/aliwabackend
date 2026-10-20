@@ -12,7 +12,8 @@ export function createSql(databaseUrl: string, options: { max?: number } = {}): 
   return postgres(databaseUrl, {
     max: options.max ?? 10,
     idle_timeout: 20,
-    connect_timeout: 10,
+    // Generous: the pooler is in eu-west-1 and first connections from far away can be slow.
+    connect_timeout: 30,
     // Required for Supabase's transaction pooler; harmless on a direct or session connection.
     prepare: false,
     // Return timestamps as Date and keep numerics as strings (no float rounding).
