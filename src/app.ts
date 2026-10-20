@@ -6,21 +6,33 @@ import { logger } from 'hono/logger'
 import { requestId } from 'hono/request-id'
 import { secureHeaders } from 'hono/secure-headers'
 import type { LoadMembership, VerifyToken } from './lib/auth.js'
+import type { AuthAdmin } from './lib/auth-admin.js'
+import type { Sql } from './lib/db.js'
 import { AppError } from './lib/errors.js'
-import { requireAuth, type AuthVariables } from './middleware/auth.js'
+import type { Mailer } from './lib/mailer.js'
+import { invitationRoutes } from './routes/invitations.js'
 import { meRoutes } from './routes/me.js'
+import { memberRoutes } from './routes/members.js'
+import { organisationRoutes } from './routes/organisations.js'
 
 export interface AppDeps {
   corsOrigins: string[]
   verifyToken: VerifyToken
   loadMembership: LoadMembership
+  sql: Sql
+  authAdmin: AuthAdmin
+  mailer: Mailer
+  /** Frontend base URL, for links in emails. */
+  appUrl: string
+  /** Clock, injectable for tests. */
+  now?: () => Date
   /** Show internal error messages in responses. Never true in production. */
   exposeErrors?: boolean
   log?: boolean
 }
 
 export function createApp(deps: AppDeps) {
-  const app = new Hono<{ Variables: AuthVariables }>()
+  const app = new Hono()
 
   app.use(requestId())
   if (deps.log !== false) app.use(logger())
@@ -38,10 +50,12 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (c) => c.json({ status: 'ok' }))
 
-  const v1 = new Hono<{ Variables: AuthVariables }>()
-  v1.use(requireAuth(deps))
-  v1.route('/me', meRoutes)
-  app.route('/v1', v1)
+  // Each router applies its own auth. Public: invitations. Signed in, no organisation yet:
+  // organisations. Everything else requires an active membership.
+  app.route('/v1/invitations', invitationRoutes(deps))
+  app.route('/v1/organisations', organisationRoutes(deps))
+  app.route('/v1/me', meRoutes(deps))
+  app.route('/v1/members', memberRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 

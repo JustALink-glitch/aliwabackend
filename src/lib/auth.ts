@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
+import type { Sql } from './db.js'
 import { isRole, type Role } from './roles.js'
 
 /** The verified identity from a Supabase Auth access token. */
@@ -42,18 +42,15 @@ export function createTokenVerifier(supabaseUrl: string): VerifyToken {
   }
 }
 
-/** Looks up the active membership for a user. Deactivated members get no access. */
-export function createMembershipLoader(db: SupabaseClient): LoadMembership {
+/** Looks up the active membership for a user. Deactivated or invited members get no access. */
+export function createMembershipLoader(sql: Sql): LoadMembership {
   return async (userId) => {
-    const { data, error } = await db
-      .from('organisation_members')
-      .select('id, organisation_id, role')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .maybeSingle()
-
-    if (error) throw error
-    if (!data || !isRole(data.role)) return null
-    return { memberId: data.id, organisationId: data.organisation_id, role: data.role }
+    const [row] = await sql<{ id: string; organisation_id: string; role: string }[]>`
+      select id, organisation_id, role
+      from public.organisation_members
+      where user_id = ${userId} and status = 'active'
+    `
+    if (!row || !isRole(row.role)) return null
+    return { memberId: row.id, organisationId: row.organisation_id, role: row.role }
   }
 }

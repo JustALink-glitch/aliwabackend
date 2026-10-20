@@ -1,0 +1,94 @@
+import { createApp } from '../../src/app.js'
+import { createMembershipLoader } from '../../src/lib/auth.js'
+import type { AuthAdmin } from '../../src/lib/auth-admin.js'
+import type { Sql } from '../../src/lib/db.js'
+import type { EmailMessage, Mailer } from '../../src/lib/mailer.js'
+
+/** Supabase Auth stand-in backed by the stub auth.users table. */
+export function fakeAuthAdmin(sql: Sql) {
+  const passwords = new Map<string, string>()
+  const deleted: string[] = []
+  const admin: AuthAdmin = {
+    async findUserIdByEmail(email) {
+      const [row] = await sql<{ id: string }[]>`select id from auth.users where lower(email) = ${email.toLowerCase()}`
+      return row?.id ?? null
+    },
+    async createUser({ email, password }) {
+      const [existing] = await sql`select 1 from auth.users where lower(email) = ${email.toLowerCase()}`
+      if (existing) return { ok: false, reason: 'email_exists' }
+      const [row] = await sql<{ id: string }[]>`insert into auth.users (email) values (${email}) returning id`
+      passwords.set(row!.id, password)
+      return { ok: true, userId: row!.id }
+    },
+    async setPassword(userId, password) {
+      passwords.set(userId, password)
+      return { ok: true }
+    },
+    async deleteUser(userId) {
+      deleted.push(userId)
+      await sql`delete from auth.users where id = ${userId}`
+    },
+  }
+  return { admin, passwords, deleted }
+}
+
+export function fakeMailer() {
+  const sent: EmailMessage[] = []
+  const mailer: Mailer = {
+    async send(message) {
+      sent.push(message)
+    },
+  }
+  /** The invitation token from the most recent email to `to`. */
+  const lastToken = (to: string) => {
+    const message = [...sent].reverse().find((m) => m.to === to)
+    const match = message?.text.match(/\/invite\/([A-Za-z0-9_-]{43})/)
+    if (!match) throw new Error(`No invitation email to ${to}`)
+    return match[1]!
+  }
+  return { mailer, sent, lastToken }
+}
+
+/**
+ * App wired to a real test database. Tokens are "user:<uuid>:<email>" so tests can act as anyone.
+ */
+export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
+  const auth = fakeAuthAdmin(sql)
+  const mail = fakeMailer()
+  const app = createApp({
+    corsOrigins: ['http://localhost:5173'],
+    appUrl: 'http://localhost:5173',
+    sql,
+    verifyToken: async (token) => {
+      const [kind, userId, email] = token.split(':')
+      return kind === 'user' && userId ? { userId, email: email ?? null } : null
+    },
+    loadMembership: createMembershipLoader(sql),
+    authAdmin: auth.admin,
+    mailer: mail.mailer,
+    log: false,
+    ...(options.now && { now: options.now }),
+  })
+  return { app, auth, mail }
+}
+
+export const as = (userId: string, email: string) => `user:${userId}:${email}`
+
+type Json = Record<string, unknown>
+
+/** Small request helper: JSON in, { status, body } out. */
+export function client(app: ReturnType<typeof createApp>) {
+  return async (method: string, path: string, options: { token?: string; body?: unknown } = {}) => {
+    const res = await app.request(path, {
+      method,
+      headers: {
+        ...(options.body !== undefined && { 'Content-Type': 'application/json' }),
+        ...(options.token && { Authorization: `Bearer ${options.token}` }),
+      },
+      ...(options.body !== undefined && { body: JSON.stringify(options.body) }),
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body = (await res.json()) as any as Json & { error?: { code: string; message: string; details?: unknown } }
+    return { status: res.status, body }
+  }
+}

@@ -76,6 +76,7 @@ describe('loadEnv', () => {
     const env = loadEnv({
       SUPABASE_URL: 'http://127.0.0.1:54321',
       SUPABASE_SECRET_KEY: 'secret',
+      DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/postgres',
       CORS_ORIGINS: 'http://localhost:5173/, https://app.synqop.com',
     })
     expect(env.PORT).toBe(5000)
@@ -84,5 +85,16 @@ describe('loadEnv', () => {
 
   it('fails fast with a readable message', () => {
     expect(() => loadEnv({})).toThrow(/SUPABASE_URL/)
+  })
+
+  it('requires an email provider in production', () => {
+    expect(() =>
+      loadEnv({
+        NODE_ENV: 'production',
+        SUPABASE_URL: 'https://x.supabase.co',
+        SUPABASE_SECRET_KEY: 's',
+        DATABASE_URL: 'postgres://u:p@h:5432/db',
+      }),
+    ).toThrow(/RESEND_API_KEY/)
   })
 })

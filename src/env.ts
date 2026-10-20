@@ -12,8 +12,15 @@ const EnvSchema = z.object({
         .map((origin) => origin.trim().replace(/\/$/, ''))
         .filter(Boolean),
     ),
+  /** Frontend base URL, used in email links. */
+  APP_URL: z.url().default('http://localhost:5173'),
   SUPABASE_URL: z.url(),
   SUPABASE_SECRET_KEY: z.string().min(1, 'SUPABASE_SECRET_KEY is required'),
+  /** Postgres connection string (Supabase → Connect → Session pooler). */
+  DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, 'DATABASE_URL must be a postgres:// connection string'),
+  /** Optional: without it, emails are printed to the console. */
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default('Synqop <onboarding@resend.dev>'),
 })
 
 export type Env = z.infer<typeof EnvSchema>
@@ -26,6 +33,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`)
       .join('\n')
     throw new Error(`Invalid environment configuration:\n${problems}`)
+  }
+  if (result.data.NODE_ENV === 'production' && !result.data.RESEND_API_KEY) {
+    throw new Error('Invalid environment configuration:\n  - RESEND_API_KEY: required in production')
   }
   return result.data
 }

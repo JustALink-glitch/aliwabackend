@@ -2,6 +2,8 @@ import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import { createApp, type AppDeps } from '../src/app.js'
 import type { Identity, Membership } from '../src/lib/auth.js'
+import type { AuthAdmin } from '../src/lib/auth-admin.js'
+import type { Sql } from '../src/lib/db.js'
 import { requireRole, type AuthVariables } from '../src/middleware/auth.js'
 
 const identity: Identity = { userId: 'user-1', email: 'ada@aliwa.org' }
@@ -12,6 +14,11 @@ function makeApp(overrides: Partial<AppDeps> = {}) {
     corsOrigins: ['http://localhost:5173'],
     verifyToken: async (token) => (token === 'good' ? identity : null),
     loadMembership: async () => membership,
+    // Unit tests don't touch the database: every query returns no rows.
+    sql: (async () => []) as unknown as Sql,
+    authAdmin: {} as AuthAdmin,
+    mailer: { send: async () => {} },
+    appUrl: 'http://localhost:5173',
     log: false,
     ...overrides,
   })
@@ -53,6 +60,7 @@ describe('authentication', () => {
     expect(await res.json()).toEqual({
       user: { id: 'user-1', email: 'ada@aliwa.org' },
       membership: { id: 'member-1', organisationId: 'org-1', role: 'admin' },
+      organisation: null,
     })
   })
 })

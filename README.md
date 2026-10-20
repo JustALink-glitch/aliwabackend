@@ -8,8 +8,23 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 ## Stack
 
 - Node 22, TypeScript, [Hono](https://hono.dev) on `@hono/node-server`
-- Supabase: Postgres, Auth (sign-in, invitation and reset links), Storage
+- Supabase: Postgres (queried directly with [postgres.js](https://github.com/porsager/postgres) so multi-step
+  writes are transactions), Auth (sign-in and password reset), Storage
+- Email: [Resend](https://resend.com) in production, console in development
 - Zod for validation, Vitest for tests
+
+## Endpoints so far
+
+| Method | Path | Who | Screen |
+|---|---|---|---|
+| `POST` | `/v1/organisations` | Signed in, no organisation yet | R1 — creates the organisation; caller becomes owner |
+| `GET` | `/v1/me` | Any member | User, membership, organisation |
+| `GET` | `/v1/members?role=&status=` | Owner, admin | B1 / B2 lists |
+| `POST` | `/v1/members` | Owner, admin | B1.02 / B2.03 — invite; emails a 72-hour link |
+| `POST` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — resend (old link stops working) |
+| `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
+| `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
+| `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
 
 ## How access works
 
@@ -58,8 +73,12 @@ Studio runs at http://127.0.0.1:54323.
 ### 3. Environment
 
 ```bash
-cp .env.example .env   # fill in SUPABASE_URL and SUPABASE_SECRET_KEY
+cp .env.example .env
 ```
+
+Fill in `SUPABASE_URL`, `SUPABASE_SECRET_KEY` and `DATABASE_URL` (Supabase → **Connect** → **Session pooler**;
+replace `[YOUR-PASSWORD]` with the database password). Without `RESEND_API_KEY`, emails are printed to the
+terminal so you can click invitation links while developing.
 
 ### 4. Run
 
@@ -72,7 +91,7 @@ npm run dev            # http://localhost:5000/health
 | Script | What it does |
 |---|---|
 | `dev` | Run with reload |
-| `typecheck` · `lint` · `test` | Checks (also run in CI) |
+| `typecheck` · `lint` · `test` | Checks (also run in CI). Database tests run when `TEST_DATABASE_URL` is set |
 | `build` · `start` | Production build and run |
 | `db:new <name>` | New migration in `supabase/migrations` |
 | `db:push` | Apply migrations to the linked project |
@@ -89,4 +108,4 @@ npm run dev            # http://localhost:5000/health
 ## Not yet decided
 
 See *Proposals to confirm* in the development reference (§12). Invitation links (72 h) are longer than Supabase's
-maximum email-link lifetime, so the API will issue its own invitation tokens.
+maximum email-link lifetime, so the API issues its own: 256-bit random, stored only as a SHA-256 hash, single use.
