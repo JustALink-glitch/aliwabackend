@@ -59,7 +59,7 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
 
       const me = await req('GET', '/v1/me', { token: ownerToken })
       expect(me.status).toBe(200)
-      expect(me.body).toMatchObject({ membership: { role: 'owner' }, organisation: { name: 'ALIWA Foundation' } })
+      expect(me.body).toMatchObject({ membership: { role: 'owner', firstName: 'Ada Chioma', lastName: 'Obi' }, organisation: { name: 'ALIWA Foundation' } })
 
       const [owner] = await sql`select first_name, last_name from organisation_members where email = ${ada.email}`
       expect(owner).toEqual({ first_name: 'Ada Chioma', last_name: 'Obi' })
