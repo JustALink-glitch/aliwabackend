@@ -94,8 +94,9 @@ export function client(app: ReturnType<typeof createApp>) {
       },
       ...(options.body !== undefined && { body: JSON.stringify(options.body) }),
     })
+    const text = await res.text()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body = (await res.json()) as any as Json & { error?: { code: string; message: string; details?: unknown } }
+    const body = (text ? JSON.parse(text) : {}) as any as Json & { error?: { code: string; message: string; details?: unknown } }
     return { status: res.status, body }
   }
 }

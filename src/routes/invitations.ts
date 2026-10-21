@@ -10,6 +10,7 @@ import {
   sendInvitationEmail,
 } from '../lib/invitations.js'
 import { fullName, parseBody, password } from '../lib/validation.js'
+import { shortName } from '../lib/names.js'
 
 interface InvitationRow {
   invitation_id: string
@@ -90,8 +91,7 @@ function assertValid(row: InvitationRow | null, now: Date): asserts row is Invit
 }
 
 /** "Abdulhameed O." — how the designs name the person who sent the invitation. */
-const inviterName = (row: InvitationRow) =>
-  row.inviter_first_name ? `${row.inviter_first_name} ${row.inviter_last_name?.charAt(0) ?? ''}.`.replace(' .', '') : null
+const inviterName = (row: InvitationRow) => shortName(row.inviter_first_name, row.inviter_last_name)
 
 const Accept = z.object({
   password,

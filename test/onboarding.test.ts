@@ -283,6 +283,58 @@ describe.skipIf(!TEST_DATABASE_URL)('onboarding: sign-up, invitations, joining',
     })
   })
 
+  describe('trainer page: detail, history and revoke (B2.02i)', () => {
+    it('filters the list by several roles', async () => {
+      const list = await req('GET', '/v1/members?role=trainer,assistant_trainer', { token: ownerToken })
+      expect(list.status).toBe(200)
+      const roles = new Set((list.body.members as { role: string }[]).map((m) => m.role))
+      expect([...roles]).toEqual(['trainer'])
+      expect((await req('GET', '/v1/members?role=boss', { token: ownerToken })).status).toBe(200)
+    })
+
+    it('shows who invited them and the invitation history, newest first', async () => {
+      const [tunde] = await sql<{ id: string }[]>`select id from organisation_members where email = 'tunde@aliwa.org'`
+      const res = await req('GET', `/v1/members/${tunde!.id}`, { token: ownerToken })
+      expect(res.status).toBe(200)
+      expect(res.body.member).toMatchObject({ email: 'tunde@aliwa.org', status: 'invited', invitedBy: 'Ada Chioma O.' })
+      const actions = (res.body.history as { action: string; actor: string | null }[]).map((h) => h.action)
+      expect(actions[0]).toBe('member.invitation_renewed')
+      expect(actions.at(-1)).toBe('member.invited')
+      expect(actions).toContain('member.invitation_resent')
+      expect((res.body.history as { actor: string | null }[]).at(-1)!.actor).toBe('Ada Chioma O.')
+    })
+
+    it('hides people from other organisations', async () => {
+      const [tunde] = await sql<{ id: string }[]>`select id from organisation_members where email = 'tunde@aliwa.org'`
+      expect((await req('GET', `/v1/members/${tunde!.id}`, { token: otherOwnerToken })).status).toBe(404)
+      expect((await req('DELETE', `/v1/members/${tunde!.id}/invitation`, { token: otherOwnerToken })).status).toBe(404)
+      expect((await req('GET', '/v1/members/not-a-uuid', { token: ownerToken })).status).toBe(404)
+    })
+
+    it("can't revoke someone who already joined", async () => {
+      const [bisi] = await sql<{ id: string }[]>`select id from organisation_members where email = 'bisi@aliwa.org'`
+      expect((await req('DELETE', `/v1/members/${bisi!.id}/invitation`, { token: ownerToken })).status).toBe(409)
+    })
+
+    it('revoking cancels the link, removes the person and frees the email', async () => {
+      const [tunde] = await sql<{ id: string }[]>`select id from organisation_members where email = 'tunde@aliwa.org'`
+      const token = t.mail.lastToken('tunde@aliwa.org')
+      const res = await req('DELETE', `/v1/members/${tunde!.id}/invitation`, { token: ownerToken })
+      expect(res.status).toBe(204)
+
+      expect((await req('GET', `/v1/invitations/${token}`)).status).toBe(404)
+      expect((await req('GET', `/v1/members/${tunde!.id}`, { token: ownerToken })).status).toBe(404)
+      const [logged] = await sql`select data from audit_events where action = 'member.invitation_revoked'`
+      expect(logged!.data).toMatchObject({ email: 'tunde@aliwa.org' })
+
+      const again = await req('POST', '/v1/members', {
+        token: ownerToken,
+        body: { email: 'tunde@aliwa.org', firstName: 'Tunde', lastName: 'B', role: 'participant' },
+      })
+      expect(again.status).toBe(201)
+    })
+  })
+
   describe('signing in without access', () => {
     it('tells a new account to set up its organisation', async () => {
       const userId = randomUUID()

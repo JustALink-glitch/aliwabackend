@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, isPg, PG } from '../lib/db.js'
 import { AppError, notFound } from '../lib/errors.js'
+import { shortName } from '../lib/names.js'
 import { invitationLink, issueInvitation, sendInvitationEmail } from '../lib/invitations.js'
 import { email, parseBody, personName, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
@@ -17,8 +18,15 @@ const InviteMember = z.object({
   role: InvitableRole,
 })
 
+const Role = z.enum(['owner', 'admin', 'trainer', 'assistant_trainer', 'participant'])
+
 const ListQuery = z.object({
-  role: z.enum(['owner', 'admin', 'trainer', 'assistant_trainer', 'participant']).optional(),
+  // One role, or several separated by commas: ?role=trainer,assistant_trainer
+  role: z
+    .string()
+    .transform((value) => value.split(',').filter(Boolean))
+    .pipe(z.array(Role).min(1))
+    .optional(),
   status: z.enum(['invited', 'active', 'deactivated']).optional(),
 })
 
@@ -47,6 +55,21 @@ const toMember = (row: MemberRow) => ({
   invitationExpiresAt: row.invitation_expires_at,
 })
 
+/** History entries shown on the person's page (B2.02i "Invitation history"). */
+const HISTORY_ACTIONS = ['member.invited', 'member.invitation_resent', 'member.invitation_renewed', 'member.joined']
+
+interface DetailRow extends MemberRow {
+  invited_by_first_name: string | null
+  invited_by_last_name: string | null
+}
+
+interface HistoryRow {
+  action: string
+  created_at: Date
+  actor_first_name: string | null
+  actor_last_name: string | null
+}
+
 const emailInUse = () =>
   new AppError(409, 'email_in_use', 'This email is already in use on Synqop. One email can belong to one organisation.')
 
@@ -68,7 +91,7 @@ export function memberRoutes(deps: AppDeps) {
         left join public.invitations i
           on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null
         where m.organisation_id = ${organisationId}
-          ${filters.role ? deps.sql`and m.role = ${filters.role}` : deps.sql``}
+          ${filters.role ? deps.sql`and m.role in ${deps.sql(filters.role)}` : deps.sql``}
           ${filters.status ? deps.sql`and m.status = ${filters.status}` : deps.sql``}
         order by m.last_name, m.first_name
       `
@@ -126,6 +149,78 @@ export function memberRoutes(deps: AppDeps) {
         link: invitationLink(deps.appUrl, created.token),
       })
       return c.json({ member: toMember(created.member), emailSent }, 201)
+    })
+
+    // One person, with who invited them and their invitation history (B2.02 / B2.02i).
+    .get('/:id', async (c) => {
+      const id = uuid.safeParse(c.req.param('id'))
+      if (!id.success) throw notFound('Member not found.')
+      const { organisationId } = c.var.auth
+      const [row] = await deps.sql<DetailRow[]>`
+        select m.id, m.email, m.first_name, m.last_name, m.role, m.status, m.invited_at, m.joined_at,
+               i.expires_at as invitation_expires_at,
+               inviter.first_name as invited_by_first_name, inviter.last_name as invited_by_last_name
+        from public.organisation_members m
+        left join public.invitations i
+          on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null
+        left join public.organisation_members inviter on inviter.id = m.invited_by
+        where m.id = ${id.data} and m.organisation_id = ${organisationId}
+      `
+      if (!row) throw notFound('Member not found.')
+      const history = await deps.sql<HistoryRow[]>`
+        select e.action, e.created_at, actor.first_name as actor_first_name, actor.last_name as actor_last_name
+        from public.audit_events e
+        left join public.organisation_members actor on actor.id = e.actor_member_id
+        where e.organisation_id = ${organisationId} and e.entity_type = 'member' and e.entity_id = ${row.id}
+          and e.action in ${deps.sql(HISTORY_ACTIONS)}
+        order by e.created_at desc, e.id desc
+        limit 50
+      `
+      return c.json({
+        member: {
+          ...toMember(row),
+          invitedBy: shortName(row.invited_by_first_name, row.invited_by_last_name),
+        },
+        history: history.map((entry) => ({
+          action: entry.action,
+          at: entry.created_at,
+          actor: shortName(entry.actor_first_name, entry.actor_last_name),
+        })),
+      })
+    })
+
+    // Revoke: cancels the link and removes someone who never set a password.
+    // They had no account or activity, so nothing is lost; the audit log keeps the record.
+    .delete('/:id/invitation', async (c) => {
+      const id = uuid.safeParse(c.req.param('id'))
+      if (!id.success) throw notFound('Member not found.')
+      const { organisationId, memberId: actorId } = c.var.auth
+
+      await deps.sql.begin(async (tx) => {
+        const [member] = await tx<MemberRow[]>`
+          select id, email, first_name, last_name, role, status, invited_at, joined_at,
+                 null::timestamptz as invitation_expires_at
+          from public.organisation_members
+          where id = ${id.data} and organisation_id = ${organisationId}
+          for update
+        `
+        if (!member) throw notFound('Member not found.')
+        if (member.status !== 'invited') {
+          throw new AppError(409, 'already_joined', 'This person has already set their password.')
+        }
+        await audit(tx, {
+          organisationId,
+          actorMemberId: actorId,
+          action: 'member.invitation_revoked',
+          entityType: 'member',
+          entityId: member.id,
+          data: { email: member.email, firstName: member.first_name, lastName: member.last_name, role: member.role },
+          requestId: c.var.requestId,
+        })
+        // Invitations cascade with the member.
+        await tx`delete from public.organisation_members where id = ${member.id}`
+      })
+      return c.body(null, 204)
     })
 
     // Resend: cancels the old link and sends a new one.

@@ -19,9 +19,11 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 |---|---|---|---|
 | `POST` | `/v1/organisations` | Signed in, no organisation yet | R1 — creates the organisation; caller becomes owner |
 | `GET` | `/v1/me` | Any member | User, membership, organisation |
-| `GET` | `/v1/members?role=&status=` | Owner, admin | B1 / B2 lists |
+| `GET` | `/v1/members?role=&status=` | Owner, admin | B1 / B2 lists (`role` takes a comma list) |
+| `GET` | `/v1/members/:id` | Owner, admin | B2.02 — person, who invited them, invitation history |
 | `POST` | `/v1/members` | Owner, admin | B1.02 / B2.03 — invite; emails a 72-hour link |
 | `POST` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — resend (old link stops working) |
+| `DELETE` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — revoke: cancels the link and removes the not-yet-joined person |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
