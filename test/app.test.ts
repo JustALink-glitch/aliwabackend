@@ -62,7 +62,7 @@ describe('authentication', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
       user: { id: 'user-1', email: 'ada@aliwa.org' },
-      membership: { id: 'member-1', organisationId: 'org-1', role: 'admin' },
+      membership: { id: 'member-1', organisationId: 'org-1', role: 'admin', firstName: '', lastName: '' },
       organisation: null,
     })
   })
