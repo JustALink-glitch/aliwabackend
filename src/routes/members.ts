@@ -40,6 +40,8 @@ interface MemberRow {
   invited_at: Date | null
   joined_at: Date | null
   invitation_expires_at: Date | null
+  /** Live (not archived) cohorts and courses this person teaches. */
+  teaching?: { cohorts: { id: string; name: string }[]; courses: { id: string; name: string }[] }
 }
 
 const toMember = (row: MemberRow) => ({
@@ -53,7 +55,19 @@ const toMember = (row: MemberRow) => ({
   joinedAt: row.joined_at,
   // Lets the UI show "Invitation pending" vs "Invitation expired" (B2.02i).
   invitationExpiresAt: row.invitation_expires_at,
+  teaching: row.teaching ?? { cohorts: [], courses: [] },
 })
+
+/** Cohorts and courses a member teaches, as JSON, for the B2.01 columns. */
+const teachingSql = (sql: AppDeps['sql']) => sql`
+  (select json_build_object(
+     'cohorts', coalesce(json_agg(distinct jsonb_build_object('id', h.id, 'name', h.name)) filter (where h.id is not null), '[]'),
+     'courses', coalesce(json_agg(distinct jsonb_build_object('id', co.id, 'name', co.name)) filter (where co.id is not null), '[]'))
+   from public.cohort_course_trainers t
+   join public.cohort_courses x on x.id = t.cohort_course_id
+   join public.cohorts h on h.id = x.cohort_id and h.archived_at is null
+   join public.courses co on co.id = x.course_id
+   where t.member_id = m.id) as teaching`
 
 /** History entries shown on the person's page (B2.02i "Invitation history"). */
 const HISTORY_ACTIONS = ['member.invited', 'member.invitation_resent', 'member.invitation_renewed', 'member.joined']
@@ -86,7 +100,7 @@ export function memberRoutes(deps: AppDeps) {
       const { organisationId } = c.var.auth
       const rows = await deps.sql<MemberRow[]>`
         select m.id, m.email, m.first_name, m.last_name, m.role, m.status, m.invited_at, m.joined_at,
-               i.expires_at as invitation_expires_at
+               i.expires_at as invitation_expires_at, ${teachingSql(deps.sql)}
         from public.organisation_members m
         left join public.invitations i
           on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null
@@ -159,7 +173,8 @@ export function memberRoutes(deps: AppDeps) {
       const [row] = await deps.sql<DetailRow[]>`
         select m.id, m.email, m.first_name, m.last_name, m.role, m.status, m.invited_at, m.joined_at,
                i.expires_at as invitation_expires_at,
-               inviter.first_name as invited_by_first_name, inviter.last_name as invited_by_last_name
+               inviter.first_name as invited_by_first_name, inviter.last_name as invited_by_last_name,
+               ${teachingSql(deps.sql)}
         from public.organisation_members m
         left join public.invitations i
           on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null

@@ -24,6 +24,20 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/members` | Owner, admin | B1.02 / B2.03 — invite; emails a 72-hour link |
 | `POST` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — resend (old link stops working) |
 | `DELETE` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — revoke: cancels the link and removes the not-yet-joined person |
+| `GET` | `/v1/programmes` | Owner, admin | A1.01 — programmes with status (Draft · Active · Archived) and counts |
+| `POST` | `/v1/programmes` | Owner, admin | A1.03 — name, description, lead (an admin), outcomes |
+| `GET` | `/v1/programmes/:id` | Owner, admin | A1.02 — programme, outcomes, cohorts, courses |
+| `PATCH` | `/v1/programmes/:id` | Owner, admin | A1.04 |
+| `POST` | `/v1/programmes/:id/archive` | Owner, admin | A1.05 — 409 `cohorts_running` (A1.05b) while cohorts are active or upcoming; archives its cohorts too |
+| `POST` | `/v1/programmes/:id/restore` | Owner, admin | Restores the programme and the cohorts archived with it |
+| `GET` | `/v1/courses?programmeId=` | Owner, admin | A2.01 — course library |
+| `POST` | `/v1/courses` | Owner, admin | A2.03 — default lead trainer; optionally add to active/upcoming cohorts |
+| `GET` | `/v1/cohorts` | Owner, admin | A3.01 — status is derived from dates (Upcoming · Active · Completed · Archived) |
+| `POST` | `/v1/cohorts` | Owner, admin | A3.07 — dates, delivery, courses; each course's default lead becomes its lead trainer |
+| `GET` | `/v1/cohorts/:id` | Owner, admin | A3.02 — cohort, its courses and trainers |
+| `PATCH` | `/v1/cohorts/:id` | Owner, admin | A3.08 — programme can't change; courses with sessions can't be removed |
+| `POST` | `/v1/cohorts/:id/archive` | Owner, admin | A3.09 — not while active (before it starts, archiving cancels it) |
+| `POST` | `/v1/cohorts/:id/restore` | Owner, admin | Not while its programme is archived |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |

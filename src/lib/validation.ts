@@ -56,3 +56,15 @@ export const timeZone = z
   .refine((value) => Intl.supportedValuesOf('timeZone').includes(value) || value === 'UTC', 'Unknown time zone.')
 
 export const uuid = z.uuid()
+
+/** A calendar date, "2026-10-05". Cohort dates are dates in the organisation's time zone. */
+export const isoDate = z.iso.date('Enter a date.')
+
+/** Optional free text: blank becomes null. */
+export const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((value) => (value ? value : null))

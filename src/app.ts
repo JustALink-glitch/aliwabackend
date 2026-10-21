@@ -10,11 +10,14 @@ import type { AuthAdmin } from './lib/auth-admin.js'
 import type { Sql } from './lib/db.js'
 import { AppError } from './lib/errors.js'
 import type { Mailer } from './lib/mailer.js'
+import { cohortRoutes } from './routes/cohorts.js'
+import { courseRoutes } from './routes/courses.js'
 import { invitationRoutes } from './routes/invitations.js'
 import { meRoutes } from './routes/me.js'
 import { memberRoutes } from './routes/members.js'
 import { organisationRoutes } from './routes/organisations.js'
 import { passwordResetRoutes } from './routes/password-reset.js'
+import { programmeRoutes } from './routes/programmes.js'
 
 export interface AppDeps {
   corsOrigins: string[]
@@ -58,6 +61,9 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/organisations', organisationRoutes(deps))
   app.route('/v1/me', meRoutes(deps))
   app.route('/v1/members', memberRoutes(deps))
+  app.route('/v1/programmes', programmeRoutes(deps))
+  app.route('/v1/courses', courseRoutes(deps))
+  app.route('/v1/cohorts', cohortRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 
