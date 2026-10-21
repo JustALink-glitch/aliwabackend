@@ -30,5 +30,11 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test -- --reporter=default --reporter=github-actions
+      - run: npm test 2>&1 | tee test.log
+        shell: bash
+      - name: Show test failures as annotations
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "FAIL|×|Error|Expected|Received|expected|Timed out|Unhandled" test.log | head -40 | sed -E 's/\x1b\[[0-9;]*m//g' | paste -sd '|' | fold -w 1500 | head -8 | while IFS= read -r line; do echo "::error::$line"; done
       - run: npm run build
