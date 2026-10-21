@@ -92,7 +92,7 @@ function selectProgrammes(sql: Sql | Tx, organisationId: string, id?: string) {
     left join lateral (
       select count(distinct e.member_id) as n
       from public.enrolments e join public.cohorts c on c.id = e.cohort_id
-      where c.programme_id = p.id and c.archived_at is null and e.status <> 'withdrawn'
+      where c.programme_id = p.id and c.archived_at is null and e.status in ('active', 'completed')
     ) en on true
     where p.organisation_id = ${organisationId}
       ${id ? sql`and p.id = ${id}` : sql``}
@@ -350,7 +350,7 @@ export function selectCohortSummaries(
       where x.cohort_id = c.id and public.status(s) = 'held'
     ) se on true
     left join lateral (
-      select count(*) as n from public.enrolments e where e.cohort_id = c.id and e.status <> 'withdrawn'
+      select count(*) as n from public.enrolments e where e.cohort_id = c.id and e.status in ('active', 'completed')
     ) en on true
     where c.organisation_id = ${organisationId}
       ${filter.programmeId ? sql`and c.programme_id = ${filter.programmeId}` : sql``}

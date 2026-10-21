@@ -38,6 +38,15 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `PATCH` | `/v1/cohorts/:id` | Owner, admin | A3.08 — programme can't change; courses with sessions can't be removed |
 | `POST` | `/v1/cohorts/:id/archive` | Owner, admin | A3.09 — not while active (before it starts, archiving cancels it) |
 | `POST` | `/v1/cohorts/:id/restore` | Owner, admin | Not while its programme is archived |
+| `GET` | `/v1/participants?cohortId=` | Owner, admin | B1.01 / A3.03 — participants with their current (or that cohort's) enrolment |
+| `POST` | `/v1/participants` | Owner, admin | B1.02 — invite and enrol; 409 `already_enrolled` / `one_cohort_only` (B1.02b) |
+| `POST` | `/v1/participants/import/preview` | Owner, admin | B1.03b — checks up to 500 rows, saves nothing |
+| `POST` | `/v1/participants/import` | Owner, admin | B1.03c — adds the ready rows, emails invitations after |
+| `GET` | `/v1/participants/:id` | Owner, admin | B1.04 — details, enrolments, history |
+| `PATCH` | `/v1/participants/:id` | Owner, admin | B1.06 — email changes only before they join; a new link goes to the new address |
+| `POST` | `/v1/participants/:id/enrolments/:eid/defer` | Owner, admin | B1.05a — optionally into an upcoming cohort in the same programme |
+| `POST` | `/v1/participants/:id/enrolments/:eid/withdraw` | Owner, admin | B1.05b |
+| `POST` | `/v1/participants/:id/enrolments/:eid/transfer` | Owner, admin | B1.05c — old enrolment kept as `transferred` |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
