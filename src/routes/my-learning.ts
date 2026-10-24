@@ -1,10 +1,17 @@
 import { Hono } from 'hono'
+import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import type { AuthContext } from '../lib/auth.js'
 import type { Sql } from '../lib/db.js'
-import { notFound } from '../lib/errors.js'
-import { uuid } from '../lib/validation.js'
+import { audit } from '../lib/db.js'
+import { AppError, notFound } from '../lib/errors.js'
+import { optionalText, parseBody, uuid } from '../lib/validation.js'
 import type { AuthVariables } from '../middleware/auth.js'
+
+const Feedback = z.object({
+  rating: z.number().int().min(1, 'Choose a rating from 1 to 5.').max(5, 'Choose a rating from 1 to 5.'),
+  comment: optionalText(1000),
+})
 
 type SessionStatus = 'scheduled' | 'in_progress' | 'held' | 'cancelled'
 type Mark = 'present' | 'absent' | 'excused'
@@ -199,8 +206,40 @@ export function myLearningRoutes(deps: AppDeps) {
         if (!uuid.safeParse(id).success) throw notFound('Session not found.')
         const [row] = await selectMySessions(deps.sql, c.var.auth, { id })
         if (!row) throw notFound('Session not found.')
-        const [resources, timeZone] = await Promise.all([resourcesOf(row.cohort_course_id, row.id), timeZoneOf(c.var.auth.organisationId)])
-        return c.json({ timeZone, session: toSession(row, now()), resources: resources.map(toResource) })
+        const [resources, timeZone, [feedback]] = await Promise.all([
+          resourcesOf(row.cohort_course_id, row.id),
+          timeZoneOf(c.var.auth.organisationId),
+          deps.sql<{ rating: number; comment: string | null }[]>`select rating, comment from public.session_feedback where session_id = ${row.id} and member_id = ${c.var.auth.memberId}`,
+        ])
+        return c.json({
+          timeZone,
+          session: toSession(row, now()),
+          resources: resources.map(toResource),
+          // P4.03 Feedback opens once the session has been held.
+          feedback: { canRate: row.status === 'held', mine: feedback ? { rating: feedback.rating, comment: feedback.comment } : null },
+        })
+      })
+
+      // P4.03 Rate a held session: 1–5 and an optional comment. Anonymous to staff; can be changed.
+      .put('/sessions/:id/feedback', async (c) => {
+        const body = await parseBody(c, Feedback)
+        const auth = c.var.auth
+        const id = c.req.param('id')
+        if (!uuid.safeParse(id).success) throw notFound('Session not found.')
+        const [row] = await selectMySessions(deps.sql, auth, { id })
+        if (!row) throw notFound('Session not found.')
+        if (row.status !== 'held') throw new AppError(409, 'session_not_held', 'You can rate a session once it has ended.')
+        await deps.sql.begin(async (tx) => {
+          const [saved] = await tx<{ id: string }[]>`
+            insert into public.session_feedback (organisation_id, session_id, member_id, rating, comment)
+            values (${auth.organisationId}, ${row.id}, ${auth.memberId}, ${body.rating}, ${body.comment})
+            on conflict (session_id, member_id) do update set rating = excluded.rating, comment = excluded.comment
+            returning id
+          `
+          // The audit names the session, not the person, so feedback stays anonymous to staff.
+          await audit(tx, { organisationId: auth.organisationId, actorMemberId: null, action: 'session.feedback_left', entityType: 'session', entityId: row.id, data: { feedbackId: saved!.id }, requestId: c.var.requestId })
+        })
+        return c.json({ ok: true })
       })
 
       // P3.01 My courses.

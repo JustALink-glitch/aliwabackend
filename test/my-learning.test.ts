@@ -42,6 +42,13 @@ describe.skipIf(!TEST_DATABASE_URL)('participant learning (P2, P3, P4, P8)', () 
     adminToken = as(admin.id, admin.email)
     await post('/v1/organisations', { organisationName: 'ALIWA Foundation', fullName: 'Ada Obi' })
     const trainer = (await post('/v1/members', { email: 'ngozi@aliwa.org', firstName: 'Ngozi', lastName: 'Eze', role: 'trainer' })).body.member as { id: string }
+    const other = (await post('/v1/members', { email: 'tunde@aliwa.org', firstName: 'Tunde', lastName: 'Ade', role: 'trainer' })).body.member as { id: string }
+    for (const [m, email] of [[trainer, 'ngozi@aliwa.org'], [other, 'tunde@aliwa.org']] as const) {
+      const userId = randomUUID()
+      await sql`insert into auth.users (id, email) values (${userId}, ${email})`
+      await sql`update organisation_members set user_id = ${userId}, status = 'active' where id = ${m.id}`
+      tokens[email] = as(userId, email)
+    }
     const programmeId = ((await post('/v1/programmes', { name: 'Data & AI Skills' })).body.programme as { id: string }).id
     courseId = ((await post('/v1/courses', { programmeId, name: 'Python for Data Analysis', plannedSessions: 10, defaultLeadMemberId: trainer.id })).body.course as { id: string }).id
     const sqlCourse = ((await post('/v1/courses', { programmeId, name: 'SQL for Data Analysis' })).body.course as { id: string }).id
@@ -138,5 +145,24 @@ describe.skipIf(!TEST_DATABASE_URL)('participant learning (P2, P3, P4, P8)', () 
     const after = await get('/v1/me/notification-preferences', tokens.chidi!)
     expect((after.body.preferences as { event: string; email: boolean }[]).find((p) => p.event === 'assignment_due')).toMatchObject({ email: false })
     expect((after.body.preferences as unknown[]).length).toBe(5)
+  })
+
+  it('collects anonymous session feedback (P4.03, C5.01, T7.04)', async () => {
+    const live = await req('PUT', `/v1/my/sessions/${sessions.live}/feedback`, { token: tokens.chidi!, body: { rating: 4 } })
+    expect(live.body.error!.code).toBe('session_not_held')
+    expect((await req('PUT', `/v1/my/sessions/${sessions.held1}/feedback`, { token: tokens.chidi!, body: { rating: 6 } })).status).toBe(400)
+    await req('PUT', `/v1/my/sessions/${sessions.held1}/feedback`, { token: tokens.chidi!, body: { rating: 4, comment: 'More practice time please.' } })
+    await req('PUT', `/v1/my/sessions/${sessions.held1}/feedback`, { token: tokens.chidi!, body: { rating: 5, comment: 'More practice time please.' } })
+    const mine = await get(`/v1/my/sessions/${sessions.held1}`, tokens.chidi!)
+    expect(mine.body.feedback).toEqual({ canRate: true, mine: { rating: 5, comment: 'More practice time please.' } })
+
+    const admin = await get(`/v1/session-feedback/${sessions.held1}`, adminToken)
+    expect(admin.body).toMatchObject({ responses: 1, attended: 1, average: 5, distribution: { 1: 0, 5: 1 }, session: { course: 'Python for Data Analysis', number: 1 } })
+    expect(admin.body.comments).toEqual([{ comment: 'More practice time please.', at: expect.any(String) }])
+    expect(JSON.stringify(admin.body)).not.toContain(people.chidi!)
+    // The course's trainer sees it; a trainer who doesn't teach it doesn't; participants can't.
+    expect((await get(`/v1/session-feedback/${sessions.held1}`, tokens['ngozi@aliwa.org']!)).body.responses).toBe(1)
+    expect((await get(`/v1/session-feedback/${sessions.held1}`, tokens['tunde@aliwa.org']!)).status).toBe(404)
+    expect((await get(`/v1/session-feedback/${sessions.held1}`, tokens.chidi!)).status).toBe(403)
   })
 })

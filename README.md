@@ -77,6 +77,8 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/my/courses` | Participant | P3.01 — my courses: trainer, attendance, work submitted, next session |
 | `GET` | `/v1/my/courses/:id` | Participant | P3.02 — sessions with my attendance, trainer, resources |
 | `GET` | `/v1/my/resources/:id` | Participant | Download link for a course or session resource |
+| `PUT` | `/v1/my/sessions/:id/feedback` | Participant | P4.03 — rate a held session 1–5 with an optional comment; can be changed |
+| `GET` | `/v1/session-feedback/:sessionId` | Owner, admin; the course's trainers | C5.01 / T7.04 — anonymous totals, distribution and comments |
 | `PATCH` | `/v1/me` | Anyone signed in | P8.01 — display name and phone |
 | `GET` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — events for my role with email / in-app choices |
 | `PUT` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — save choices |
