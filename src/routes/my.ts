@@ -9,6 +9,7 @@ import { MAX_FILE_BYTES, safeFileName } from '../lib/storage.js'
 import { optionalText, parseBody, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 import { gradeDisplay, scaleLabel, type Scale } from './assignments.js'
+import { myLearningRoutes } from './my-learning.js'
 
 const Upload = z.object({
   name: z.string().trim().min(1).max(200),
@@ -321,7 +322,12 @@ export function myRoutes(deps: AppDeps) {
         const handedIn = rows
           .filter((r) => r.submission_id)
           .sort((x, y) => (y.graded_at ?? y.submitted_at!).getTime() - (x.graded_at ?? x.submitted_at!).getTime())
-        return c.json({ timeZone, grades: handedIn.map((r) => ({ ...summary(r, t), hasFeedback: Boolean(r.feedback) })) })
+        return c.json({
+          timeZone,
+          grades: handedIn.map((r) => ({ ...summary(r, t), hasFeedback: Boolean(r.feedback), feedback: r.feedback, gradedBy: name(r.graded_by_first, r.graded_by_last) })),
+        })
       })
+
+      .route('/', myLearningRoutes(deps))
   )
 }

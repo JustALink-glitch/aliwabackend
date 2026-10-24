@@ -71,6 +71,15 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `PUT` | `/v1/my/assignments/:id/submission` | Participant | P5.02 — submit or replace (file, link or text); late or closed rules; 409 once graded |
 | `GET` | `/v1/my/assignments/:id/files/:fileId` | Participant | Download link for a brief file or my own file |
 | `GET` | `/v1/my/grades` | Participant | P6.01 — everything handed in, graded or waiting |
+| `GET` | `/v1/my/overview` | Participant | P2.01 — current cohort (or deferred), next and upcoming sessions, my attendance, programme progress |
+| `GET` | `/v1/my/sessions` | Participant | P4.01 — sessions in my cohorts with my attendance; join link from the day before |
+| `GET` | `/v1/my/sessions/:id` | Participant | P4.02 — one session, my attendance, its resources |
+| `GET` | `/v1/my/courses` | Participant | P3.01 — my courses: trainer, attendance, work submitted, next session |
+| `GET` | `/v1/my/courses/:id` | Participant | P3.02 — sessions with my attendance, trainer, resources |
+| `GET` | `/v1/my/resources/:id` | Participant | Download link for a course or session resource |
+| `PATCH` | `/v1/me` | Anyone signed in | P8.01 — display name and phone |
+| `GET` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — events for my role with email / in-app choices |
+| `PUT` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — save choices |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
