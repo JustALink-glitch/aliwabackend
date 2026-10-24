@@ -47,15 +47,21 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/participants/:id/enrolments/:eid/defer` | Owner, admin | B1.05a — optionally into an upcoming cohort in the same programme |
 | `POST` | `/v1/participants/:id/enrolments/:eid/withdraw` | Owner, admin | B1.05b |
 | `POST` | `/v1/participants/:id/enrolments/:eid/transfer` | Owner, admin | B1.05c — old enrolment kept as `transferred` |
-| `GET` | `/v1/sessions?from=&to=&cohortId=` | Owner, admin | C1.01 / A3.04 — sessions (dates are organisation-local), plus attendance to confirm |
-| `POST` | `/v1/sessions` | Owner, admin | C1.02 — one session or a weekly series (up to 200), inside the cohort's dates |
-| `GET` | `/v1/sessions/:id` | Owner, admin | C1.03 — number, series, trainer, expected, attendance and report state |
-| `PATCH` | `/v1/sessions/:id` | Owner, admin | C1.06 / C1.04 — scope `this`, `following` or `all`; held sessions never change |
-| `POST` | `/v1/sessions/:id/cancel` | Owner, admin | C1.05 — reason required; emails participants and the trainer |
-| `GET` | `/v1/sessions/:id/attendance` | Owner, admin | C2.01 — register, counts, rate (present ÷ recorded) |
-| `PUT` | `/v1/sessions/:id/attendance` | Owner, admin | C2.03 — marks people not yet marked; 409 `already_recorded` for changes |
-| `PATCH` | `/v1/sessions/:id/attendance/:memberId` | Owner, admin | C2.02 — change one mark; reason required and logged |
-| `GET` | `/v1/sessions/:id/attendance/history` | Owner, admin | C2.05 — register saves and changes, newest first |
+| `GET` | `/v1/sessions?from=&to=&cohortId=` | Staff (trainers: own courses) | C1.01 / A3.04 — sessions (dates are organisation-local), plus attendance to confirm |
+| `POST` | `/v1/sessions` | Owner, admin, lead trainer (own courses) | C1.02 — one session or a weekly series (up to 200), inside the cohort's dates |
+| `GET` | `/v1/sessions/:id` | Staff (trainers: own courses) | C1.03 / T3.02 — number, series, trainer, expected, attendance, report state, resources and what you `can` do |
+| `PATCH` | `/v1/sessions/:id` | Owner, admin, lead trainer | C1.06 / C1.04 — scope `this`, `following` or `all`; held sessions never change |
+| `POST` | `/v1/sessions/:id/cancel` | Owner, admin, lead trainer | C1.05 — reason required; emails participants and the trainer |
+| `GET` | `/v1/sessions/:id/attendance` | Staff (own courses) | C2.01 — register, counts, rate (present ÷ recorded) |
+| `PUT` | `/v1/sessions/:id/attendance` | Owner, admin, trainers (assistants if F1.04 allows) | C2.03 — marks people not yet marked; 409 `already_recorded` for changes |
+| `PATCH` | `/v1/sessions/:id/attendance/:memberId` | Owner, admin, trainers (assistants if F1.04 allows) | C2.02 — change one mark; reason required and logged |
+| `GET` | `/v1/sessions/:id/attendance/history` | Staff (own courses) | C2.05 — register saves and changes, newest first |
+| `GET` | `/v1/sessions/options` | Staff | C1.02 / T3.03 — cohorts and courses you can schedule in, with their trainers |
+| `POST` | `/v1/sessions/:id/resources/uploads` | Staff (assistants if F1.04 allows) | T8.01 — signed upload URL for a resource file |
+| `POST` | `/v1/sessions/:id/resources` | Staff (assistants if F1.04 allows) | T8.01 — add a file or link to the session or the whole course; visible to participants or not |
+| `GET` | `/v1/sessions/:id/resources/:resourceId` | Staff (own courses) | Download link for a resource |
+| `GET` | `/v1/trainer/cohorts` | Trainer, assistant | T3.04 — cohorts I teach in, one row per course |
+| `GET` | `/v1/trainer/cohorts/:id` | Trainer, assistant | T3.05 — cohort summary, courses (mine marked), flagged count |
 | `GET` | `/v1/assignments` | Staff | T6.01 / C4.01 — trainers: their courses, drafts included; admins: every published assignment |
 | `GET` | `/v1/assignments/options` | Staff | T6.02 — courses the user teaches, allowed grading scales |
 | `POST` | `/v1/assignments` | Owner, admin, trainer; assistant if allowed | T6.02 — create; `publish: false` saves a draft |

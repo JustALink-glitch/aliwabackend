@@ -2,12 +2,14 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
-import { AppError, notFound } from '../lib/errors.js'
+import { AppError, forbidden, notFound } from '../lib/errors.js'
 import { renderEmail } from '../lib/mailer.js'
+import { can, staffScope, teachingIds, type StaffScope } from '../lib/staff.js'
 import { MAX_SESSIONS_PER_SCHEDULE, occurrences, toRrule, weekdaysFromRrule, type Weekday } from '../lib/schedule.js'
 import { isoDate, optionalText, parseBody, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 import { attendanceRoutes } from './attendance.js'
+import { sessionResourceRoutes, sessionResources, toResource } from './session-resources.js'
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Enter a time like 10:00.')
 
@@ -104,7 +106,7 @@ interface SessionRow {
 }
 
 /** Sessions with everything the lists and detail need. Numbers ignore cancelled sessions. */
-function selectSessions(sql: Sql | Tx, organisationId: string, filter: { id?: string; from?: Date; to?: Date; cohortId?: string; seriesId?: string }) {
+function selectSessions(sql: Sql | Tx, organisationId: string, filter: { id?: string; from?: Date; to?: Date; cohortId?: string; seriesId?: string; cohortCourseIds?: string[] | null }) {
   return sql<SessionRow[]>`
     with numbered as (
       select s.id,
@@ -145,6 +147,7 @@ function selectSessions(sql: Sql | Tx, organisationId: string, filter: { id?: st
       ${filter.to ? sql`and s.starts_at < ${filter.to}` : sql``}
       ${filter.cohortId ? sql`and h.id = ${filter.cohortId}` : sql``}
       ${filter.seriesId ? sql`and s.series_id = ${filter.seriesId}` : sql``}
+      ${filter.cohortCourseIds ? sql`and s.cohort_course_id = any(${filter.cohortCourseIds}::uuid[])` : sql``}
     order by s.starts_at, co.name
   `
 }
@@ -179,17 +182,25 @@ const toSession = (row: SessionRow) => ({
     : null,
 })
 
-/** /v1/sessions — C1. Owners and admins (trainers get their own routes with T3). */
+/** /v1/sessions — C1 for admins; T3 for trainers, limited to the cohort courses they teach. */
 export function sessionRoutes(deps: AppDeps) {
   async function timeZoneOf(sql: Sql | Tx, organisationId: string) {
     const [row] = await sql<{ time_zone: string; name: string }[]>`select time_zone, name from public.organisations where id = ${organisationId}`
     return row!
   }
 
-  async function findSession(sql: Sql | Tx, organisationId: string, id: string) {
+  async function findSession(sql: Sql | Tx, organisationId: string, id: string, scope?: StaffScope) {
     if (!uuid.safeParse(id).success) throw notFound('Session not found.')
-    const [row] = await selectSessions(sql, organisationId, { id })
+    const [row] = await selectSessions(sql, organisationId, { id, cohortCourseIds: scope ? teachingIds(scope) : null })
     if (!row) throw notFound('Session not found.')
+    return row
+  }
+
+  /** The session, if this person may change its schedule (C1.04–C1.06, T3.06–T3.07). */
+  async function findForScheduling(c: { var: { auth: AuthVariables['auth'] } }, id: string) {
+    const scope = await staffScope(deps.sql, c.var.auth)
+    const row = await findSession(deps.sql, c.var.auth.organisationId, id, scope)
+    if (!can(scope, row.cohort_course_id).schedule) throw forbidden('Only admins and the course’s lead trainer can change this session.')
     return row
   }
 
@@ -242,11 +253,40 @@ export function sessionRoutes(deps: AppDeps) {
 
   return (
     new Hono<{ Variables: AuthVariables }>()
-      .use(requireAuth(deps), requireRole('owner', 'admin'))
+      .use(requireAuth(deps), requireRole('owner', 'admin', 'trainer', 'assistant_trainer'))
+
+      // C1.02 / T3.03: cohorts and courses this person can schedule in, with each course's trainers.
+      .get('/options', async (c) => {
+        const auth = c.var.auth
+        const scope = await staffScope(deps.sql, auth)
+        const ids = teachingIds(scope)
+        const rows = await deps.sql<
+          { cohort_id: string; cohort_name: string; status: string; starts_on: string; ends_on: string; cc_id: string; course_id: string; course_name: string; trainers: { id: string; firstName: string; lastName: string; isLead: boolean; status: string }[] }[]
+        >`
+          select h.id as cohort_id, h.name as cohort_name, public.status(h) as status, h.starts_on::text, h.ends_on::text,
+                 x.id as cc_id, co.id as course_id, co.name as course_name,
+                 coalesce((select json_agg(json_build_object('id', m.id, 'firstName', m.first_name, 'lastName', m.last_name, 'isLead', t.is_lead, 'status', m.status) order by t.is_lead desc, m.first_name)
+                           from public.cohort_course_trainers t join public.organisation_members m on m.id = t.member_id where t.cohort_course_id = x.id), '[]') as trainers
+          from public.cohorts h
+          join public.cohort_courses x on x.cohort_id = h.id
+          join public.courses co on co.id = x.course_id
+          where h.organisation_id = ${auth.organisationId} and h.archived_at is null
+            ${ids ? deps.sql`and x.id = any(${ids}::uuid[])` : deps.sql``}
+          order by h.starts_on desc, h.name, co.name
+        `
+        const cohorts = new Map<string, { id: string; name: string; status: string; startsOn: string; endsOn: string; courses: unknown[] }>()
+        for (const r of rows) {
+          if (!scope.admin && !can(scope, r.cc_id).schedule) continue
+          if (!cohorts.has(r.cohort_id)) cohorts.set(r.cohort_id, { id: r.cohort_id, name: r.cohort_name, status: r.status, startsOn: r.starts_on, endsOn: r.ends_on, courses: [] })
+          cohorts.get(r.cohort_id)!.courses.push({ id: r.cc_id, courseId: r.course_id, name: r.course_name, trainers: r.trainers })
+        }
+        return c.json({ cohorts: [...cohorts.values()] })
+      })
 
       // C1.01 week view (?from=&to= are organisation-local dates, inclusive) and A3.04 (?cohortId=).
       .get('/', async (c) => {
         const { organisationId } = c.var.auth
+        const ids = teachingIds(await staffScope(deps.sql, c.var.auth))
         const { time_zone: tz } = await timeZoneOf(deps.sql, organisationId)
         const from = isoDate.safeParse(c.req.query('from'))
         const to = isoDate.safeParse(c.req.query('to'))
@@ -260,6 +300,7 @@ export function sessionRoutes(deps: AppDeps) {
           ...(range!.from && { from: range!.from }),
           ...(range!.to && { to: range!.to }),
           ...(cohortId.success && { cohortId: cohortId.data }),
+          cohortCourseIds: ids,
         })
         // "Attendance to confirm": held in the last 30 days, not cancelled, nothing recorded.
         const toConfirm = await deps.sql<SessionRow[]>`
@@ -267,25 +308,31 @@ export function sessionRoutes(deps: AppDeps) {
           where s.organisation_id = ${organisationId} and s.cancelled_at is null and s.ends_at < now()
             and s.ends_at > now() - interval '30 days'
             and not exists (select 1 from public.attendance_records a where a.session_id = s.id)
+            ${ids ? deps.sql`and s.cohort_course_id = any(${ids}::uuid[])` : deps.sql``}
             ${cohortId.success ? deps.sql`and s.cohort_course_id in (select id from public.cohort_courses where cohort_id = ${cohortId.data})` : deps.sql``}
           order by s.starts_at desc limit 10
         `
         const confirmRows = toConfirm.length
-          ? (await Promise.all(toConfirm.map((r) => selectSessions(deps.sql, organisationId, { id: r.id })))).flat()
+          ? (await Promise.all(toConfirm.map((r) => selectSessions(deps.sql, organisationId, { id: r.id, cohortCourseIds: ids })))).flat()
           : []
         const [any] = await deps.sql<{ exists: boolean }[]>`
           select exists (
             select 1 from public.sessions s
             ${cohortId.success ? deps.sql`join public.cohort_courses x on x.id = s.cohort_course_id and x.cohort_id = ${cohortId.data}` : deps.sql``}
             where s.organisation_id = ${organisationId}
+              ${ids ? deps.sql`and s.cohort_course_id = any(${ids}::uuid[])` : deps.sql``}
           ) as exists
         `
         return c.json({ timeZone: tz, hasAny: any!.exists, sessions: rows.map(toSession), attendanceToConfirm: confirmRows.map(toSession) })
       })
 
       .get('/:id', async (c) => {
-        const row = await findSession(deps.sql, c.var.auth.organisationId, c.req.param('id'))
-        return c.json({ session: toSession(row) })
+        const scope = await staffScope(deps.sql, c.var.auth)
+        const row = await findSession(deps.sql, c.var.auth.organisationId, c.req.param('id'), scope)
+        const allowed = can(scope, row.cohort_course_id)
+        const permissions = { schedule: allowed.schedule, attendance: allowed.attendance, resources: allowed.resources, report: allowed.report }
+        const resources = await sessionResources(deps.sql, row.id, row.cohort_course_id)
+        return c.json({ session: toSession(row), can: permissions, resources: resources.map((r) => toResource(r, c.var.auth.memberId)) })
       })
 
       // C1.02 Schedule session(s).
@@ -301,6 +348,7 @@ export function sessionRoutes(deps: AppDeps) {
             where x.organisation_id = ${organisationId} and x.cohort_id = ${body.cohortId} and x.course_id = ${body.courseId}
           `
           if (!cohortCourse) throw fieldError('courseId', 'Choose a course this cohort runs.')
+          if (!can(await staffScope(tx, c.var.auth), cohortCourse.id).schedule) throw fieldError('courseId', 'Choose a course you lead in this cohort.')
           if (cohortCourse.status === 'archived' || cohortCourse.status === 'completed') {
             throw fieldError('cohortId', 'Choose an active or upcoming cohort.')
           }
@@ -359,7 +407,7 @@ export function sessionRoutes(deps: AppDeps) {
       .patch('/:id', async (c) => {
         const body = await parseBody(c, Edit)
         const { organisationId, memberId: actorId } = c.var.auth
-        const session = await findSession(deps.sql, organisationId, c.req.param('id'))
+        const session = await findForScheduling(c, c.req.param('id'))
         if (session.cancelled_at) throw new AppError(409, 'session_cancelled', 'This session was cancelled, so it can’t be edited.')
         if (session.status !== 'scheduled') throw new AppError(409, 'session_started', 'This session has started or been held, so it can’t be changed.')
         const { time_zone: tz, name: organisationName } = await timeZoneOf(deps.sql, organisationId)
@@ -433,7 +481,7 @@ export function sessionRoutes(deps: AppDeps) {
       .post('/:id/cancel', async (c) => {
         const body = await parseBody(c, Cancel)
         const { organisationId, memberId: actorId } = c.var.auth
-        const session = await findSession(deps.sql, organisationId, c.req.param('id'))
+        const session = await findForScheduling(c, c.req.param('id'))
         if (session.cancelled_at) return c.json({ cancelled: true, emailed: 0 })
         if (session.status !== 'scheduled') throw new AppError(409, 'session_started', 'This session has started or been held, so it can’t be cancelled.')
         await deps.sql.begin(async (tx) => {
@@ -468,5 +516,6 @@ export function sessionRoutes(deps: AppDeps) {
 
       // C2: /:id/attendance…
       .route('/', attendanceRoutes(deps))
+      .route('/', sessionResourceRoutes(deps))
   )
 }

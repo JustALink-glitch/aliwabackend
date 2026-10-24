@@ -4,6 +4,7 @@ import { refreshFlags, ruleSettings, type Rule } from '../lib/attention.js'
 import { notFound } from '../lib/errors.js'
 import { uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
+import { selectCohortSummaries, toCohortSummary } from './programmes.js'
 
 /**
  * /v1/trainer — T7 My participants. Trainers see people in cohorts they teach; attendance and work are
@@ -159,6 +160,110 @@ export function trainerRoutes(deps: AppDeps) {
             submittedAt: w.submitted_at,
             status: w.graded ? 'graded' : w.submitted_at ? (w.is_late ? 'late' : 'submitted') : w.due_at.getTime() < Date.now() ? 'overdue' : 'not_submitted',
             grade: display(w),
+          })),
+        })
+      })
+
+      // T3.04 My cohorts: one row per course I teach in a cohort.
+      .get('/cohorts', async (c) => {
+        const auth = c.var.auth
+        const [rows, [org]] = await Promise.all([
+          deps.sql<{
+            cohort_id: string
+            cohort_name: string
+            programme_name: string
+            status: string
+            starts_on: string
+            ends_on: string
+            course_name: string
+            is_lead: boolean
+            planned: number | null
+            held: number
+            participants: number
+            present: number
+            recorded: number
+            next_at: Date | null
+          }[]>`
+            select h.id as cohort_id, h.name as cohort_name, p.name as programme_name, public.status(h) as status, h.starts_on::text, h.ends_on::text,
+                   co.name as course_name, t.is_lead, x.planned_session_count as planned,
+                   (select count(*)::int from public.sessions s where s.cohort_course_id = x.id and public.status(s) = 'held') as held,
+                   (select count(*)::int from public.enrolments e where e.cohort_id = h.id and e.status in ('active', 'completed')) as participants,
+                   (select count(*)::int from public.attendance_records a join public.sessions s on s.id = a.session_id
+                     where s.cohort_course_id = x.id and s.cancelled_at is null and a.status = 'present') as present,
+                   (select count(*)::int from public.attendance_records a join public.sessions s on s.id = a.session_id
+                     where s.cohort_course_id = x.id and s.cancelled_at is null) as recorded,
+                   (select min(s.starts_at) from public.sessions s where s.cohort_course_id = x.id and s.cancelled_at is null and s.ends_at > now()) as next_at
+            from public.cohort_course_trainers t
+            join public.cohort_courses x on x.id = t.cohort_course_id
+            join public.cohorts h on h.id = x.cohort_id
+            join public.programmes p on p.id = h.programme_id
+            join public.courses co on co.id = x.course_id
+            where t.member_id = ${auth.memberId} and h.archived_at is null and not h.is_draft
+            order by (public.status(h) = 'completed'), h.starts_on desc, co.name
+          `,
+          deps.sql<{ time_zone: string }[]>`select time_zone from public.organisations where id = ${auth.organisationId}`,
+        ])
+        return c.json({
+          timeZone: org!.time_zone,
+          cohorts: rows.map((r) => ({
+            id: r.cohort_id,
+            name: r.cohort_name,
+            programme: r.programme_name,
+            status: r.status,
+            startsOn: r.starts_on,
+            endsOn: r.ends_on,
+            course: { name: r.course_name, lead: r.is_lead, held: r.held, planned: r.planned },
+            participants: r.participants,
+            attendance: r.recorded ? Math.round((r.present / r.recorded) * 100) : null,
+            nextSessionAt: r.next_at,
+          })),
+        })
+      })
+
+      // T3.05 Cohort detail, for a cohort I teach in.
+      .get('/cohorts/:id', async (c) => {
+        const auth = c.var.auth
+        const id = c.req.param('id')
+        if (!uuid.safeParse(id).success) throw notFound('Cohort not found.')
+        const [summary] = await selectCohortSummaries(deps.sql, auth.organisationId, { id })
+        const [mine] = await deps.sql<{ ok: number }[]>`
+          select 1 as ok from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id
+          where t.member_id = ${auth.memberId} and x.cohort_id = ${id}
+        `
+        if (!summary || !mine || summary.archived_at) throw notFound('Cohort not found.')
+        await refreshFlags(deps.sql, auth.organisationId, now())
+        const [courses, [flagged], [org], rules] = await Promise.all([
+          deps.sql<{ id: string; course_id: string; name: string; planned: number | null; held: number; first_at: Date | null; mine: boolean; trainers: { id: string; name: string; isLead: boolean }[] }[]>`
+            select x.id, x.course_id, co.name, x.planned_session_count as planned,
+                   (select count(*)::int from public.sessions s where s.cohort_course_id = x.id and public.status(s) = 'held') as held,
+                   (select min(s.starts_at) from public.sessions s where s.cohort_course_id = x.id and s.cancelled_at is null) as first_at,
+                   exists (select 1 from public.cohort_course_trainers t where t.cohort_course_id = x.id and t.member_id = ${auth.memberId}) as mine,
+                   coalesce((select json_agg(json_build_object('id', m.id, 'name', m.first_name || ' ' || m.last_name, 'isLead', t.is_lead) order by t.is_lead desc, m.first_name)
+                             from public.cohort_course_trainers t join public.organisation_members m on m.id = t.member_id
+                             where t.cohort_course_id = x.id and m.status <> 'deactivated'), '[]') as trainers
+            from public.cohort_courses x join public.courses co on co.id = x.course_id
+            where x.cohort_id = ${id} order by co.created_at
+          `,
+          deps.sql<{ n: number }[]>`
+            select count(distinct f.enrolment_id)::int as n from public.attention_flags f join public.enrolments e on e.id = f.enrolment_id
+            where e.cohort_id = ${id} and f.cleared_at is null and f.resolved_at is null
+          `,
+          deps.sql<{ time_zone: string }[]>`select time_zone from public.organisations where id = ${auth.organisationId}`,
+          ruleSettings(deps.sql, auth.organisationId),
+        ])
+        return c.json({
+          timeZone: org!.time_zone,
+          cohort: toCohortSummary(summary),
+          flagged: rules.trainersSee ? flagged!.n : null,
+          courses: courses.map((x) => ({
+            id: x.id,
+            courseId: x.course_id,
+            name: x.name,
+            plannedSessions: x.planned,
+            heldSessions: x.held,
+            firstSessionAt: x.first_at,
+            mine: x.mine,
+            trainers: x.trainers,
           })),
         })
       })

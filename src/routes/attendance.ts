@@ -2,8 +2,10 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
-import { AppError, notFound } from '../lib/errors.js'
+import type { AuthContext } from '../lib/auth.js'
+import { AppError, forbidden, notFound } from '../lib/errors.js'
 import { shortName } from '../lib/names.js'
+import { can, staffScope } from '../lib/staff.js'
 import { optionalText, parseBody, uuid } from '../lib/validation.js'
 import type { AuthVariables } from '../middleware/auth.js'
 
@@ -24,6 +26,7 @@ const EditMark = z.object({
 
 interface SessionInfo {
   id: string
+  cohort_course_id: string
   organisation_id: string
   cohort_id: string
   status: string
@@ -48,17 +51,21 @@ interface RegisterRow {
 
 /**
  * /v1/sessions/:id/attendance — C2.01 register, C2.02 edit, C2.03 marking, C2.05 history.
- * Owners and admins; trainers get the same rules on their own sessions with T4.
+ * Owners and admins everywhere; trainers on their own courses (T4); assistants if F1.04 allows.
  */
 export function attendanceRoutes(deps: AppDeps) {
-  async function findSession(sql: Sql | Tx, organisationId: string, id: string): Promise<SessionInfo> {
+  /** The session, if this person can see it; with `write`, only if they can take its attendance. */
+  async function findSession(sql: Sql | Tx, auth: AuthContext, id: string, write = false): Promise<SessionInfo> {
     if (!uuid.safeParse(id).success) throw notFound('Session not found.')
     const [row] = await sql<SessionInfo[]>`
-      select s.id, s.organisation_id, x.cohort_id, public.status(s) as status, s.starts_at
+      select s.id, s.cohort_course_id, s.organisation_id, x.cohort_id, public.status(s) as status, s.starts_at
       from public.sessions s join public.cohort_courses x on x.id = s.cohort_course_id
-      where s.id = ${id} and s.organisation_id = ${organisationId}
+      where s.id = ${id} and s.organisation_id = ${auth.organisationId}
     `
     if (!row) throw notFound('Session not found.')
+    const allowed = can(await staffScope(sql, auth), row.cohort_course_id)
+    if (!allowed.see) throw notFound('Session not found.')
+    if (write && !allowed.attendance) throw forbidden('Your organisation doesn’t let assistant trainers take attendance.')
     return row
   }
 
@@ -82,11 +89,11 @@ export function attendanceRoutes(deps: AppDeps) {
   }
 
   return (
-    // Mounted inside sessionRoutes, which already requires an owner or admin.
+    // Mounted inside sessionRoutes, which already requires staff; each route checks the session's course.
     new Hono<{ Variables: AuthVariables }>()
 
       .get('/:id/attendance', async (c) => {
-        const session = await findSession(deps.sql, c.var.auth.organisationId, c.req.param('id'))
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'))
         const [rows, [changes]] = await Promise.all([
           selectRegister(deps.sql, session),
           deps.sql<{ count: number; last_by_first: string | null; last_by_last: string | null }[]>`
@@ -137,7 +144,7 @@ export function attendanceRoutes(deps: AppDeps) {
       .put('/:id/attendance', async (c) => {
         const body = await parseBody(c, SaveRegister)
         const { organisationId, memberId: actorId } = c.var.auth
-        const session = await findSession(deps.sql, organisationId, c.req.param('id'))
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'), true)
         requireOpen(session)
         const saved = await deps.sql.begin(async (tx) => {
           const register = await selectRegister(tx, session)
@@ -185,7 +192,7 @@ export function attendanceRoutes(deps: AppDeps) {
       .patch('/:id/attendance/:memberId', async (c) => {
         const body = await parseBody(c, EditMark)
         const { organisationId, memberId: actorId } = c.var.auth
-        const session = await findSession(deps.sql, organisationId, c.req.param('id'))
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'), true)
         requireOpen(session)
         const memberId = c.req.param('memberId')
         if (!uuid.safeParse(memberId).success) throw notFound('Participant not found.')
@@ -219,7 +226,7 @@ export function attendanceRoutes(deps: AppDeps) {
 
       // C2.05 Attendance history: register saves and every change, newest first.
       .get('/:id/attendance/history', async (c) => {
-        const session = await findSession(deps.sql, c.var.auth.organisationId, c.req.param('id'))
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'))
         const [changes, saves] = await Promise.all([
           deps.sql<{ at: Date; first_name: string; last_name: string; from_status: string | null; to_status: string; reason: string; by_first: string | null; by_last: string | null }[]>`
             select ch.created_at as at, p.first_name, p.last_name, ch.from_status, ch.to_status, ch.reason,

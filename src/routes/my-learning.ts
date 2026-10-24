@@ -130,7 +130,7 @@ export function myLearningRoutes(deps: AppDeps) {
   async function resourcesOf(cohortCourseId: string, sessionId?: string) {
     return deps.sql<{ id: string; kind: 'file' | 'link'; name: string; url: string | null; size_bytes: string | null; session_id: string | null }[]>`
       select id, kind, name, url, size_bytes, session_id from public.resources
-      where cohort_course_id = ${cohortCourseId} ${sessionId ? deps.sql`and session_id = ${sessionId}` : deps.sql``}
+      where cohort_course_id = ${cohortCourseId} and visible_to_participants ${sessionId ? deps.sql`and (session_id = ${sessionId} or session_id is null)` : deps.sql``}
       order by created_at desc
     `
   }
@@ -332,7 +332,7 @@ export function myLearningRoutes(deps: AppDeps) {
           select r.name, r.storage_path, r.url from public.resources r
           join public.cohort_courses x on x.id = r.cohort_course_id
           join public.enrolments e on e.cohort_id = x.cohort_id and e.member_id = ${auth.memberId} and e.status in ('active', 'completed')
-          where r.id = ${id} and r.organisation_id = ${auth.organisationId}
+          where r.id = ${id} and r.organisation_id = ${auth.organisationId} and r.visible_to_participants
         `
         if (!file) throw notFound('Resource not found.')
         return c.json({ url: file.storage_path ? await deps.storage.downloadUrl(file.storage_path, file.name) : file.url })
