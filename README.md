@@ -79,6 +79,12 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/my/resources/:id` | Participant | Download link for a course or session resource |
 | `PUT` | `/v1/my/sessions/:id/feedback` | Participant | P4.03 — rate a held session 1–5 with an optional comment; can be changed |
 | `GET` | `/v1/session-feedback/:sessionId` | Owner, admin; the course's trainers | C5.01 / T7.04 — anonymous totals, distribution and comments |
+| `GET` | `/v1/attention` | Staff (trainers: own cohorts) | D1.01 — re-checks the rules, then flagged participants with their flags and latest follow-up |
+| `GET` | `/v1/attention/count` | Staff | Sidebar count of flagged participants |
+| `GET` | `/v1/attention/interventions` | Staff | D1.04 — interventions log |
+| `GET` | `/v1/attention/participants/:memberId` | Staff | D1.02 / T7.02 — open flags, interventions, next review |
+| `POST` | `/v1/attention/participants/:memberId/interventions` | Staff | D1.03 / T7.03 — record a call, email, message or visit |
+| `POST` | `/v1/attention/participants/:memberId/resolve` | Owner, admin | D1.02 — resolve open flags with a note; they don't reopen until the rule stops matching |
 | `PATCH` | `/v1/me` | Anyone signed in | P8.01 — display name and phone |
 | `GET` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — events for my role with email / in-app choices |
 | `PUT` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — save choices |
