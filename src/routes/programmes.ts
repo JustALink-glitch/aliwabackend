@@ -155,8 +155,12 @@ export function programmeRoutes(deps: AppDeps) {
     .use(requireAuth(deps), requireRole('owner', 'admin'))
 
     .get('/', async (c) => {
-      const rows = await selectProgrammes(deps.sql, c.var.auth.organisationId)
-      return c.json({ programmes: rows.map(toProgramme), defaultOutcomes: DEFAULT_OUTCOMES })
+      const [rows, [settings]] = await Promise.all([
+        selectProgrammes(deps.sql, c.var.auth.organisationId),
+        deps.sql<{ options: string[] }[]>`select default_outcome_options as options from public.organisation_settings where organisation_id = ${c.var.auth.organisationId}`,
+      ])
+      // F1.05 Default outcome options, set in Settings.
+      return c.json({ programmes: rows.map(toProgramme), defaultOutcomes: settings?.options ?? DEFAULT_OUTCOMES })
     })
 
     .post('/', async (c) => {

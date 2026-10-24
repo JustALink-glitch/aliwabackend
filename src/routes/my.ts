@@ -9,6 +9,7 @@ import { MAX_FILE_BYTES, safeFileName } from '../lib/storage.js'
 import { optionalText, parseBody, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 import { gradeDisplay, scaleLabel, type Scale } from './assignments.js'
+import { myCompletionRoutes } from './my-completion.js'
 import { myLearningRoutes } from './my-learning.js'
 
 const Upload = z.object({
@@ -329,5 +330,6 @@ export function myRoutes(deps: AppDeps) {
       })
 
       .route('/', myLearningRoutes(deps))
+      .route('/', myCompletionRoutes(deps))
   )
 }

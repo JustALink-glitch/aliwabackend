@@ -84,9 +84,18 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/attention/interventions` | Staff | D1.04 — interventions log |
 | `GET` | `/v1/attention/participants/:memberId` | Staff | D1.02 / T7.02 — open flags, interventions, next review |
 | `POST` | `/v1/attention/participants/:memberId/interventions` | Staff | D1.03 / T7.03 — record a call, email, message or visit |
-| `POST` | `/v1/attention/participants/:memberId/resolve` | Owner, admin | D1.02 — resolve open flags with a note; they don't reopen until the rule stops matching |
+| `POST` | `/v1/attention/participants/:memberId/resolve` | Owner, admin (trainers if F1.06 allows) | D1.02 — resolve open flags with a note; they don't reopen until the rule stops matching |
 | `GET` | `/v1/trainer/participants` | Trainer, assistant | T7.01 — people in cohorts I teach: own-course attendance and work, flag, last active |
 | `GET` | `/v1/trainer/participants/:memberId` | Trainer, assistant | T7.02 — sessions and assignments from my courses only |
+| `GET` | `/v1/completion/certificates` | Owner, admin | D2.01 — everyone against the completion rule (eligible, issued, not yet, not completed); issues automatically if F1.05 says so |
+| `POST` | `/v1/completion/certificates` | Owner, admin | D2.02 — issue certificates to eligible people; optionally email a link |
+| `GET` | `/v1/completion/certificates/:id` | Owner, admin | A certificate as printed |
+| `GET` | `/v1/completion/outcomes` | Owner, admin | D3.01 — outcomes for a programme (optionally one cohort), counts per option |
+| `POST` | `/v1/completion/outcomes` | Owner, admin | D3.02 — record (or update) an outcome for someone who completed |
+| `GET` `PUT` | `/v1/settings/completion` | Owner, admin | F1.05 — completion criteria, issuing, signatory, certificate title, default outcomes |
+| `GET` `PUT` | `/v1/settings/attention-rules` | Owner, admin | F1.06 — signals, who sees flags, how they close; with how many are flagged now |
+| `GET` | `/v1/my/progress` | Participant | P7.01 — progress against the completion rule |
+| `GET` | `/v1/my/certificate` | Participant | P7.02 — my certificate |
 | `PATCH` | `/v1/me` | Anyone signed in | P8.01 — display name and phone |
 | `GET` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — events for my role with email / in-app choices |
 | `PUT` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — save choices |

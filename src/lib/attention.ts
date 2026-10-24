@@ -8,6 +8,10 @@ export interface RuleSettings {
   overdue: { enabled: boolean; count: number }
   inactivity: { enabled: boolean; days: number }
   grade: { enabled: boolean; belowPct: number }
+  /** F1.06 "Who sees flags" and "Closing a flag". */
+  trainersSee: boolean
+  clearAutomatically: boolean
+  trainersCanResolve: boolean
 }
 
 export async function ruleSettings(sql: Sql | Tx, organisationId: string): Promise<RuleSettings> {
@@ -23,10 +27,14 @@ export async function ruleSettings(sql: Sql | Tx, organisationId: string): Promi
       flag_inactivity_days: number
       flag_grade_enabled: boolean
       flag_grade_below_pct: string
+      flag_trainers_see: boolean
+      flag_clear_automatically: boolean
+      flag_trainers_can_resolve: boolean
     }[]
   >`
     select flag_attendance_enabled, flag_attendance_below_pct, flag_missed_in_row_enabled, flag_missed_in_row_count,
-           flag_overdue_enabled, flag_overdue_count, flag_inactivity_enabled, flag_inactivity_days, flag_grade_enabled, flag_grade_below_pct
+           flag_overdue_enabled, flag_overdue_count, flag_inactivity_enabled, flag_inactivity_days, flag_grade_enabled, flag_grade_below_pct,
+           flag_trainers_see, flag_clear_automatically, flag_trainers_can_resolve
     from public.organisation_settings where organisation_id = ${organisationId}
   `
   return {
@@ -35,6 +43,9 @@ export async function ruleSettings(sql: Sql | Tx, organisationId: string): Promi
     overdue: { enabled: s?.flag_overdue_enabled ?? true, count: s?.flag_overdue_count ?? 1 },
     inactivity: { enabled: s?.flag_inactivity_enabled ?? true, days: s?.flag_inactivity_days ?? 7 },
     grade: { enabled: s?.flag_grade_enabled ?? true, belowPct: Number(s?.flag_grade_below_pct ?? 50) },
+    trainersSee: s?.flag_trainers_see ?? true,
+    clearAutomatically: s?.flag_clear_automatically ?? true,
+    trainersCanResolve: s?.flag_trainers_can_resolve ?? false,
   }
 }
 
@@ -140,9 +151,10 @@ export async function refreshFlags(sql: Sql, organisationId: string, now = new D
     const held = new Set(live.map((f) => `${f.enrolment_id}:${f.rule}`))
     for (const f of live) {
       const details = matches.get(f.enrolment_id)?.[f.rule]
-      if (!details) {
+      // With "Clear automatically" off, an open flag waits for someone to resolve it; resolved ones still close.
+      if (!details && (rules.clearAutomatically || f.resolved_at)) {
         await tx`update public.attention_flags set cleared_at = ${now} where id = ${f.id}`
-      } else if (!f.resolved_at) {
+      } else if (details && !f.resolved_at) {
         await tx`update public.attention_flags set details = ${tx.json(details as never)} where id = ${f.id}`
       }
     }

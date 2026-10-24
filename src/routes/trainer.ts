@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { AppDeps } from '../app.js'
-import { refreshFlags, type Rule } from '../lib/attention.js'
+import { refreshFlags, ruleSettings, type Rule } from '../lib/attention.js'
 import { notFound } from '../lib/errors.js'
 import { uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
@@ -20,7 +20,7 @@ export function trainerRoutes(deps: AppDeps) {
       .get('/participants', async (c) => {
         const auth = c.var.auth
         await refreshFlags(deps.sql, auth.organisationId, now())
-        const [rows, [org]] = await Promise.all([
+        const [rows, [org], rules] = await Promise.all([
           deps.sql<{
             member_id: string
             first_name: string
@@ -63,6 +63,7 @@ export function trainerRoutes(deps: AppDeps) {
                      m.first_name, m.last_name
           `,
           deps.sql<{ time_zone: string }[]>`select time_zone from public.organisations where id = ${auth.organisationId}`,
+          ruleSettings(deps.sql, auth.organisationId),
         ])
         return c.json({
           timeZone: org!.time_zone,
@@ -72,7 +73,7 @@ export function trainerRoutes(deps: AppDeps) {
             cohort: { id: r.cohort_id, name: r.cohort_name },
             attendance: r.recorded ? { present: r.present, recorded: r.recorded, rate: Math.round((r.present / r.recorded) * 100) } : null,
             work: { submitted: r.submitted, published: r.published },
-            flag: r.flag,
+            flag: rules.trainersSee ? r.flag : null,
             lastActive: r.last_active,
           })),
         })

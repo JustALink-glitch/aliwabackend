@@ -21,13 +21,21 @@ const Resolve = z.object({ note: z.string().trim().min(1, 'Add a note. It’s ke
 
 const isAdmin = (auth: AuthContext) => auth.role === 'owner' || auth.role === 'admin'
 
-/** Trainers see participants in cohorts where they teach a course; admins see everyone. */
-const scope = (sql: Sql, auth: AuthContext, cohortColumn: string) =>
+/** Trainers see participants in cohorts where they teach a course (if F1.06 lets them); admins see everyone. */
+const scope = (sql: Sql, auth: AuthContext, hidden: boolean) =>
   isAdmin(auth)
     ? sql``
-    : sql`and ${sql(cohortColumn)} in (
+    : hidden
+      ? sql`and false`
+      : sql`and e.cohort_id in (
         select x.cohort_id from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id
         where t.member_id = ${auth.memberId})`
+
+/** F1.06 "Who sees flags": whether this trainer's view is switched off. */
+const hiddenFor = async (sql: Sql, auth: AuthContext) => !isAdmin(auth) && !(await ruleSettings(sql, auth.organisationId)).trainersSee
+
+/** Admins can always resolve; trainers only when F1.06 allows it. */
+const canResolve = async (sql: Sql, auth: AuthContext) => isAdmin(auth) || (await ruleSettings(sql, auth.organisationId)).trainersCanResolve
 
 const name = (first: string | null, last: string | null) => (first ? `${first} ${last ?? ''}`.trim() : null)
 
@@ -43,13 +51,14 @@ export function attentionRoutes(deps: AppDeps) {
   /** The participant's current enrolment that flags and interventions attach to. */
   async function currentEnrolment(auth: AuthContext, memberId: string) {
     if (!uuid.safeParse(memberId).success) throw notFound('Participant not found.')
+    const hidden = await hiddenFor(deps.sql, auth)
     const [row] = await deps.sql<{ id: string; cohort_id: string; cohort_name: string; first_name: string; last_name: string }[]>`
       select e.id, e.cohort_id, h.name as cohort_name, m.first_name, m.last_name
       from public.enrolments e
       join public.organisation_members m on m.id = e.member_id
       join public.cohorts h on h.id = e.cohort_id
       where e.member_id = ${memberId} and e.organisation_id = ${auth.organisationId} and m.role = 'participant'
-        ${scope(deps.sql, auth, 'e.cohort_id')}
+        ${scope(deps.sql, auth, hidden)}
       order by (e.status = 'active') desc, e.enrolled_at desc
       limit 1
     `
@@ -64,6 +73,7 @@ export function attentionRoutes(deps: AppDeps) {
       // D1.01 Needs attention: one row per flagged participant, oldest unresolved first.
       .get('/', async (c) => {
         const auth = c.var.auth
+        const hidden = await hiddenFor(deps.sql, auth)
         await refreshFlags(deps.sql, auth.organisationId, now())
         const [rows, rules, timeZone] = await Promise.all([
           deps.sql<
@@ -96,7 +106,7 @@ export function attentionRoutes(deps: AppDeps) {
             ) i on true
             left join public.organisation_members b on b.id = i.recorded_by
             where f.organisation_id = ${auth.organisationId} and f.cleared_at is null and f.resolved_at is null
-              ${scope(deps.sql, auth, 'e.cohort_id')}
+              ${scope(deps.sql, auth, hidden)}
             group by e.id, m.id, h.id, i.method, i.outcome, i.contacted_at, b.first_name, b.last_name, i.review_on
             order by min(f.raised_at)
           `,
@@ -106,7 +116,7 @@ export function attentionRoutes(deps: AppDeps) {
         return c.json({
           timeZone,
           rules,
-          canResolve: isAdmin(auth),
+          canResolve: await canResolve(deps.sql, auth),
           participants: rows.map((r) => ({
             enrolmentId: r.enrolment_id,
             participant: { id: r.member_id, name: `${r.first_name} ${r.last_name}`.trim() },
@@ -120,10 +130,11 @@ export function attentionRoutes(deps: AppDeps) {
       // Sidebar count (G1): re-checks the rules, then counts flagged participants.
       .get('/count', async (c) => {
         const auth = c.var.auth
+        const hidden = await hiddenFor(deps.sql, auth)
         await refreshFlags(deps.sql, auth.organisationId, now())
         const [row] = await deps.sql<{ count: number }[]>`
           select count(distinct f.enrolment_id)::int as count from public.attention_flags f join public.enrolments e on e.id = f.enrolment_id
-          where f.organisation_id = ${auth.organisationId} and f.cleared_at is null and f.resolved_at is null ${scope(deps.sql, auth, 'e.cohort_id')}
+          where f.organisation_id = ${auth.organisationId} and f.cleared_at is null and f.resolved_at is null ${scope(deps.sql, auth, hidden)}
         `
         return c.json({ count: row!.count })
       })
@@ -131,6 +142,7 @@ export function attentionRoutes(deps: AppDeps) {
       // D1.04 Interventions log.
       .get('/interventions', async (c) => {
         const auth = c.var.auth
+        const hidden = await hiddenFor(deps.sql, auth)
         const [rows, timeZone] = await Promise.all([
           deps.sql<{ id: string; member_id: string; first_name: string; last_name: string; cohort_name: string; method: string; outcome: string; contacted_at: Date; notes: string | null; review_on: string | null; by_first: string | null; by_last: string | null; by_role: string | null }[]>`
             select i.id, m.id as member_id, m.first_name, m.last_name, h.name as cohort_name, i.method, i.outcome, i.contacted_at, i.notes, i.review_on::text,
@@ -140,7 +152,7 @@ export function attentionRoutes(deps: AppDeps) {
             join public.organisation_members m on m.id = e.member_id
             join public.cohorts h on h.id = e.cohort_id
             left join public.organisation_members b on b.id = i.recorded_by
-            where i.organisation_id = ${auth.organisationId} ${scope(deps.sql, auth, 'e.cohort_id')}
+            where i.organisation_id = ${auth.organisationId} ${scope(deps.sql, auth, hidden)}
             order by i.contacted_at desc
           `,
           timeZoneOf(auth.organisationId),
@@ -183,7 +195,7 @@ export function attentionRoutes(deps: AppDeps) {
           timeZone,
           enrolmentId: e.id,
           cohort: { id: e.cohort_id, name: e.cohort_name },
-          canResolve: isAdmin(auth),
+          canResolve: await canResolve(deps.sql, auth),
           flags: flags.map((f) => ({ id: f.id, rule: f.rule, details: f.details, raisedAt: f.raised_at })),
           nextReview,
           interventions: interventions.map((i) => ({
@@ -225,7 +237,7 @@ export function attentionRoutes(deps: AppDeps) {
       .post('/participants/:memberId/resolve', async (c) => {
         const body = await parseBody(c, Resolve)
         const auth = c.var.auth
-        if (!isAdmin(auth)) throw forbidden('Only admins can resolve flags.')
+        if (!(await canResolve(deps.sql, auth))) throw forbidden('Only admins can resolve flags.')
         const e = await currentEnrolment(auth, c.req.param('memberId'))
         const resolved = await deps.sql.begin(async (tx) => {
           const rows = await tx<{ id: string; rule: string }[]>`
