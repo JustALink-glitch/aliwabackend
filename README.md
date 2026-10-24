@@ -56,6 +56,13 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `PUT` | `/v1/sessions/:id/attendance` | Owner, admin | C2.03 — marks people not yet marked; 409 `already_recorded` for changes |
 | `PATCH` | `/v1/sessions/:id/attendance/:memberId` | Owner, admin | C2.02 — change one mark; reason required and logged |
 | `GET` | `/v1/sessions/:id/attendance/history` | Owner, admin | C2.05 — register saves and changes, newest first |
+| `GET` | `/v1/assignments` | Staff | T6.01 / C4.01 — trainers: their courses, drafts included; admins: every published assignment |
+| `GET` | `/v1/assignments/options` | Staff | T6.02 — courses the user teaches, allowed grading scales |
+| `POST` | `/v1/assignments` | Owner, admin, trainer; assistant if allowed | T6.02 — create; `publish: false` saves a draft |
+| `GET` | `/v1/assignments/:id` | Staff | T6.03 / C4.02 — everyone's status, grading queue, `locked` once work is in |
+| `PATCH` | `/v1/assignments/:id` | Owner, admin, trainer; assistant if allowed | T6.05 — edit; 409 `assignment_locked` for scale or submission types after submissions |
+| `GET` | `/v1/assignments/:id/submissions/:memberId` | Staff | T6.04 / C4.03 — submission, grade, previous / next |
+| `PUT` | `/v1/assignments/:id/submissions/:memberId/grade` | Owner, admin, trainer; assistant if allowed | T6.04 — grade in the assignment's scale; visible to the participant on save |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |

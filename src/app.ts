@@ -18,6 +18,7 @@ import { memberRoutes } from './routes/members.js'
 import { organisationRoutes } from './routes/organisations.js'
 import { participantRoutes } from './routes/participants.js'
 import { passwordResetRoutes } from './routes/password-reset.js'
+import { assignmentRoutes } from './routes/assignments.js'
 import { programmeRoutes } from './routes/programmes.js'
 import { sessionRoutes } from './routes/sessions.js'
 
@@ -68,6 +69,7 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/cohorts', cohortRoutes(deps))
   app.route('/v1/participants', participantRoutes(deps))
   app.route('/v1/sessions', sessionRoutes(deps))
+  app.route('/v1/assignments', assignmentRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 
