@@ -272,7 +272,14 @@ export function sessionRoutes(deps: AppDeps) {
         const confirmRows = toConfirm.length
           ? (await Promise.all(toConfirm.map((r) => selectSessions(deps.sql, organisationId, { id: r.id })))).flat()
           : []
-        return c.json({ timeZone: tz, sessions: rows.map(toSession), attendanceToConfirm: confirmRows.map(toSession) })
+        const [any] = await deps.sql<{ exists: boolean }[]>`
+          select exists (
+            select 1 from public.sessions s
+            ${cohortId.success ? deps.sql`join public.cohort_courses x on x.id = s.cohort_course_id and x.cohort_id = ${cohortId.data}` : deps.sql``}
+            where s.organisation_id = ${organisationId}
+          ) as exists
+        `
+        return c.json({ timeZone: tz, hasAny: any!.exists, sessions: rows.map(toSession), attendanceToConfirm: confirmRows.map(toSession) })
       })
 
       .get('/:id', async (c) => {

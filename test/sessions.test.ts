@@ -80,6 +80,7 @@ describe.skipIf(!TEST_DATABASE_URL)('sessions (C1)', () => {
       const list = await req('GET', `/v1/sessions?from=${day(0)}&to=${day(14)}`, { token })
       const sessions = list.body.sessions as { id: string; startsAt: string; number: number; total: number; joinUrl: string; series: { sessions: number } }[]
       expect(sessions).toHaveLength(4)
+      expect(list.body.hasAny).toBe(true)
       ids = sessions.map((s) => s.id)
       // Africa/Lagos is UTC+1, so 10:00 there is 09:00 UTC.
       expect(sessions[0]!.startsAt).toBe(`${start}T09:00:00.000Z`)
