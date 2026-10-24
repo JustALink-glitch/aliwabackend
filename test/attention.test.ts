@@ -145,4 +145,16 @@ describe.skipIf(!TEST_DATABASE_URL)('needs attention (D1, T7)', () => {
     await sql`insert into submissions (organisation_id, assignment_id, member_id, text_body, is_late) values (${a!.organisation_id}, ${a!.id}, ${people.bolaji!}, 'late', true)`
     expect(rulesOf(await list(), 'bolaji')).toEqual([])
   })
+
+  it('lists the trainer’s participants with their own-course figures (T7.01, T7.02)', async () => {
+    const res = await get('/v1/trainer/participants', trainerToken)
+    const rows = res.body.participants as { id: string; name: string; attendance: { rate: number } | null; work: { submitted: number; published: number }; flag: string | null }[]
+    expect(rows.map((r) => r.name).sort()).toEqual(['Amara Okafor', 'Bolaji Ade', 'Chidi Nwosu'])
+    expect(rows.find((r) => r.id === people.amara)).toMatchObject({ flag: 'missed_in_row', work: { submitted: 1, published: 1 } })
+    expect(rows.find((r) => r.id === people.chidi)).toMatchObject({ attendance: { rate: 100 }, flag: 'low_grade' })
+    const detail = await get(`/v1/trainer/participants/${people.chidi}`, trainerToken)
+    expect(detail.body).toMatchObject({ participant: { name: 'Chidi Nwosu' }, courses: ['Python'], trainers: ['Ngozi Eze'], assignments: [{ title: 'Python Exercises 1', status: 'graded', grade: '30%' }] })
+    expect((await get(`/v1/trainer/participants/${people.kemi}`, trainerToken)).status).toBe(404)
+    expect((await get('/v1/trainer/participants')).status).toBe(403)
+  })
 })

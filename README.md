@@ -85,6 +85,8 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/attention/participants/:memberId` | Staff | D1.02 / T7.02 — open flags, interventions, next review |
 | `POST` | `/v1/attention/participants/:memberId/interventions` | Staff | D1.03 / T7.03 — record a call, email, message or visit |
 | `POST` | `/v1/attention/participants/:memberId/resolve` | Owner, admin | D1.02 — resolve open flags with a note; they don't reopen until the rule stops matching |
+| `GET` | `/v1/trainer/participants` | Trainer, assistant | T7.01 — people in cohorts I teach: own-course attendance and work, flag, last active |
+| `GET` | `/v1/trainer/participants/:memberId` | Trainer, assistant | T7.02 — sessions and assignments from my courses only |
 | `PATCH` | `/v1/me` | Anyone signed in | P8.01 — display name and phone |
 | `GET` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — events for my role with email / in-app choices |
 | `PUT` | `/v1/me/notification-preferences` | Anyone signed in | P8.01 — save choices |

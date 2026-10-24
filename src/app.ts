@@ -25,6 +25,7 @@ import { programmeRoutes } from './routes/programmes.js'
 import { feedbackRoutes } from './routes/feedback.js'
 import { myRoutes } from './routes/my.js'
 import { sessionRoutes } from './routes/sessions.js'
+import { trainerRoutes } from './routes/trainer.js'
 
 export interface AppDeps {
   corsOrigins: string[]
@@ -78,6 +79,7 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/my', myRoutes(deps))
   app.route('/v1/session-feedback', feedbackRoutes(deps))
   app.route('/v1/attention', attentionRoutes(deps))
+  app.route('/v1/trainer', trainerRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 
