@@ -239,6 +239,8 @@ interface ListRow {
   cohort_name: string | null
   cohort_status: string | null
   programme_name: string | null
+  present: number | null
+  recorded: number | null
 }
 
 const toListItem = (row: ListRow) => ({
@@ -259,6 +261,8 @@ const toListItem = (row: ListRow) => ({
         enrolledAt: row.enrolled_at,
         cohort: { id: row.cohort_id, name: row.cohort_name, status: row.cohort_status },
         programmeName: row.programme_name,
+        // Attendance % in this cohort: present ÷ recorded (excused counts as not present).
+        attendance: row.recorded ? { present: row.present ?? 0, recorded: row.recorded, rate: Math.round(((row.present ?? 0) / row.recorded) * 100) } : null,
       }
     : null,
 })
@@ -361,7 +365,8 @@ export function participantRoutes(deps: AppDeps) {
           select m.id, m.email, m.first_name, m.last_name, m.phone, m.status, m.invited_at, m.joined_at,
                  i.expires_at as invitation_expires_at, u.last_sign_in_at,
                  e.id as enrolment_id, e.status as enrolment_status, e.enrolled_at,
-                 ch.id as cohort_id, ch.name as cohort_name, public.status(ch) as cohort_status, p.name as programme_name
+                 ch.id as cohort_id, ch.name as cohort_name, public.status(ch) as cohort_status, p.name as programme_name,
+                 att.present, att.recorded
           from public.organisation_members m
           left join public.invitations i on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null
           left join auth.users u on u.id = m.user_id
@@ -375,6 +380,13 @@ export function participantRoutes(deps: AppDeps) {
           }
           left join public.cohorts ch on ch.id = e.cohort_id
           left join public.programmes p on p.id = ch.programme_id
+          left join lateral (
+            select count(*) filter (where a.status = 'present')::int as present, count(*)::int as recorded
+            from public.attendance_records a
+            join public.sessions s on s.id = a.session_id and s.cancelled_at is null
+            join public.cohort_courses x on x.id = s.cohort_course_id
+            where a.member_id = m.id and x.cohort_id = ch.id
+          ) att on true
           where m.organisation_id = ${organisationId} and m.role = 'participant'
           order by m.first_name, m.last_name
         `
@@ -542,6 +554,8 @@ export function participantRoutes(deps: AppDeps) {
               programme_id: string
               programme_name: string
               trainers: string[]
+              present: number
+              recorded: number
             }[]
           >`
             select e.id, e.status, e.status_reason, e.status_note, e.status_effective_on::text, e.status_changed_at, e.enrolled_at,
@@ -553,7 +567,15 @@ export function participantRoutes(deps: AppDeps) {
                      join public.cohort_course_trainers t on t.cohort_course_id = x.id
                      join public.organisation_members m on m.id = t.member_id
                      where x.cohort_id = c.id
-                   ), '{}') as trainers
+                   ), '{}') as trainers,
+                   (select count(*)::int from public.attendance_records a
+                      join public.sessions s on s.id = a.session_id and s.cancelled_at is null
+                      join public.cohort_courses x on x.id = s.cohort_course_id
+                    where a.member_id = e.member_id and x.cohort_id = c.id and a.status = 'present') as present,
+                   (select count(*)::int from public.attendance_records a
+                      join public.sessions s on s.id = a.session_id and s.cancelled_at is null
+                      join public.cohort_courses x on x.id = s.cohort_course_id
+                    where a.member_id = e.member_id and x.cohort_id = c.id) as recorded
             from public.enrolments e
             join public.cohorts c on c.id = e.cohort_id
             join public.programmes p on p.id = c.programme_id
@@ -594,6 +616,7 @@ export function participantRoutes(deps: AppDeps) {
             cohort: { id: e.cohort_id, name: e.cohort_name, status: e.cohort_status },
             programme: { id: e.programme_id, name: e.programme_name },
             trainers: e.trainers,
+            attendance: e.recorded ? { present: e.present, recorded: e.recorded, rate: Math.round((e.present / e.recorded) * 100) } : null,
           })),
           history: history.map((h) => ({ action: h.action, at: h.created_at, data: h.data, actor: shortName(h.actor_first_name, h.actor_last_name) })),
         })

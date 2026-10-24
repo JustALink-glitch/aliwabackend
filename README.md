@@ -52,6 +52,10 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/sessions/:id` | Owner, admin | C1.03 — number, series, trainer, expected, attendance and report state |
 | `PATCH` | `/v1/sessions/:id` | Owner, admin | C1.06 / C1.04 — scope `this`, `following` or `all`; held sessions never change |
 | `POST` | `/v1/sessions/:id/cancel` | Owner, admin | C1.05 — reason required; emails participants and the trainer |
+| `GET` | `/v1/sessions/:id/attendance` | Owner, admin | C2.01 — register, counts, rate (present ÷ recorded) |
+| `PUT` | `/v1/sessions/:id/attendance` | Owner, admin | C2.03 — marks people not yet marked; 409 `already_recorded` for changes |
+| `PATCH` | `/v1/sessions/:id/attendance/:memberId` | Owner, admin | C2.02 — change one mark; reason required and logged |
+| `GET` | `/v1/sessions/:id/attendance/history` | Owner, admin | C2.05 — register saves and changes, newest first |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |

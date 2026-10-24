@@ -7,6 +7,7 @@ import { renderEmail } from '../lib/mailer.js'
 import { MAX_SESSIONS_PER_SCHEDULE, occurrences, toRrule, weekdaysFromRrule, type Weekday } from '../lib/schedule.js'
 import { isoDate, optionalText, parseBody, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
+import { attendanceRoutes } from './attendance.js'
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Enter a time like 10:00.')
 
@@ -464,5 +465,8 @@ export function sessionRoutes(deps: AppDeps) {
         }
         return c.json({ cancelled: true, emailed })
       })
+
+      // C2: /:id/attendance…
+      .route('/', attendanceRoutes(deps))
   )
 }
