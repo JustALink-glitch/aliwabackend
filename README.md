@@ -63,6 +63,14 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `PATCH` | `/v1/assignments/:id` | Owner, admin, trainer; assistant if allowed | T6.05 — edit; 409 `assignment_locked` for scale or submission types after submissions |
 | `GET` | `/v1/assignments/:id/submissions/:memberId` | Staff | T6.04 / C4.03 — submission, grade, previous / next |
 | `PUT` | `/v1/assignments/:id/submissions/:memberId/grade` | Owner, admin, trainer; assistant if allowed | T6.04 — grade in the assignment's scale; visible to the participant on save |
+| `POST` | `/v1/assignments/uploads` | Owner, admin, trainer; assistant if allowed | T6.02 — one-time signed upload URL for a brief file (25 MB) |
+| `GET` | `/v1/assignments/:id/files/:fileId` | Staff | Download link (5 min) for a brief file or a submitted file |
+| `GET` | `/v1/my/assignments` | Participant | P5.01 — published work in my cohorts, with my status and grade |
+| `GET` | `/v1/my/assignments/:id` | Participant | P5.02 / P5.03 / P6.02 — brief, my submission, grade, feedback, whether I can submit |
+| `POST` | `/v1/my/assignments/:id/uploads` | Participant | P5.02 — one-time signed upload URL for my file |
+| `PUT` | `/v1/my/assignments/:id/submission` | Participant | P5.02 — submit or replace (file, link or text); late or closed rules; 409 once graded |
+| `GET` | `/v1/my/assignments/:id/files/:fileId` | Participant | Download link for a brief file or my own file |
+| `GET` | `/v1/my/grades` | Participant | P6.01 — everything handed in, graded or waiting |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |

@@ -1,15 +1,17 @@
+import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
 import { AppError, forbidden, notFound } from '../lib/errors.js'
+import { MAX_FILE_BYTES, safeFileName } from '../lib/storage.js'
 import { isoDate, optionalText, parseBody, uuid } from '../lib/validation.js'
 import type { AuthContext } from '../lib/auth.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 
 const SCALES = ['points', 'percentage', 'letter', 'pass_fail', 'rubric'] as const
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'] as const
-type Scale = (typeof SCALES)[number]
+export type Scale = (typeof SCALES)[number]
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Enter a time like 23:59.')
 
@@ -33,6 +35,11 @@ const Fields = z.object({
   title: z.string().trim().min(1, 'Enter a title.').max(200),
   brief: optionalText(5000),
   links: z.array(link).max(10).default([]),
+  /** Files to keep (by id) and newly uploaded ones (by storage path). Anything left out is removed. */
+  files: z
+    .array(z.union([z.object({ id: uuid }), z.object({ path: z.string().min(1).max(500), name: z.string().trim().min(1).max(200) })]))
+    .max(10, 'Attach up to 10 files.')
+    .default([]),
   dueDate: isoDate,
   dueTime: time,
   submissionTypes: z.array(z.enum(['file', 'link', 'text'])).min(1, 'Choose at least one way to submit.'),
@@ -50,6 +57,14 @@ function checkScale(v: z.infer<typeof Fields>, ctx: z.RefinementCtx) {
 
 const Create = Fields.superRefine(checkScale)
 const Edit = Fields.superRefine(checkScale)
+
+const Upload = z.object({
+  name: z.string().trim().min(1).max(200),
+  size: z.number().int().min(1, 'This file is empty.').max(MAX_FILE_BYTES, 'Files can be up to 25 MB.'),
+  type: z.string().max(200).nullish(),
+})
+
+type FileInput = z.infer<typeof Fields>['files'][number]
 
 const Grade = z.object({
   points: z.number().nullish(),
@@ -164,7 +179,7 @@ function selectAssignments(sql: Sql | Tx, organisationId: string, filter: { id?:
   `
 }
 
-function scaleLabel(scale: Scale, maxPoints: number | null, criteria: number) {
+export function scaleLabel(scale: Scale, maxPoints: number | null, criteria: number) {
   switch (scale) {
     case 'points':
       return `Points / ${maxPoints}`
@@ -215,7 +230,7 @@ interface GradeValues {
 }
 
 /** One grade as participants see it: "78 / 100", "86%", "B", "Pass", "12 / 16". */
-function gradeDisplay(scale: Scale, maxPoints: number | null, criteria: number, g: GradeValues): string | null {
+export function gradeDisplay(scale: Scale, maxPoints: number | null, criteria: number, g: GradeValues): string | null {
   switch (scale) {
     case 'points':
       return g.points === null ? null : `${Number(g.points)} / ${maxPoints}`
@@ -293,6 +308,38 @@ export function assignmentRoutes(deps: AppDeps) {
         values (${organisationId}, ${assignmentId}, 'link', ${l.name ?? l.url.replace(/^https?:\/\//, '').slice(0, 200)}, ${l.url})
       `
     }
+  }
+
+  const materialsPrefix = (organisationId: string) => `${organisationId}/materials/`
+
+  /** Checks newly uploaded files before saving: they must be ours and actually uploaded. */
+  async function prepareFiles(organisationId: string, files: FileInput[]) {
+    const fresh: { path: string; name: string; size: number; type: string | null }[] = []
+    for (const [i, f] of files.entries()) {
+      if (!('path' in f)) continue
+      if (!f.path.startsWith(materialsPrefix(organisationId)) || f.path.includes('..')) throw fieldError(`files.${i}`, 'Attach the file again.')
+      const stat = await deps.storage.stat(f.path)
+      if (!stat) throw fieldError(`files.${i}`, `${f.name} didn’t finish uploading. Attach it again.`)
+      if (stat.size > MAX_FILE_BYTES) throw fieldError(`files.${i}`, 'Files can be up to 25 MB.')
+      fresh.push({ path: f.path, name: f.name, size: stat.size, type: stat.type })
+    }
+    return { keep: files.flatMap((f) => ('id' in f ? [f.id] : [])), fresh }
+  }
+
+  /** Replaces the assignment's files; returns storage paths to delete after the transaction. */
+  async function saveFiles(tx: Tx, organisationId: string, assignmentId: string, files: Awaited<ReturnType<typeof prepareFiles>>) {
+    const removed = await tx<{ storage_path: string }[]>`
+      delete from public.assignment_materials
+      where assignment_id = ${assignmentId} and kind = 'file' and not (id = any(${files.keep}::uuid[]))
+      returning storage_path
+    `
+    for (const f of files.fresh) {
+      await tx`
+        insert into public.assignment_materials (organisation_id, assignment_id, kind, name, storage_path, size_bytes, mime_type)
+        values (${organisationId}, ${assignmentId}, 'file', ${f.name}, ${f.path}, ${f.size}, ${f.type})
+      `
+    }
+    return removed.map((r) => r.storage_path)
   }
 
   async function criteriaOf(sql: Sql | Tx, assignmentId: string) {
@@ -446,6 +493,7 @@ export function assignmentRoutes(deps: AppDeps) {
         await checkAllowedScale(deps.sql, auth.organisationId, body.gradingScale)
         const due = await dueAt(deps.sql, auth.organisationId, body.dueDate, body.dueTime)
         if (body.publish && due.getTime() <= Date.now()) throw fieldError('dueDate', 'Choose a due date in the future.')
+        const files = await prepareFiles(auth.organisationId, body.files)
         const id = await deps.sql.begin(async (tx) => {
           const [row] = await tx<{ id: string }[]>`
             insert into public.assignments (organisation_id, cohort_course_id, title, brief, due_at, submission_types, late_policy,
@@ -457,6 +505,7 @@ export function assignmentRoutes(deps: AppDeps) {
           `
           if (body.gradingScale === 'rubric') await saveCriteria(tx, auth.organisationId, row!.id, body.criteria)
           await saveLinks(tx, auth.organisationId, row!.id, body.links)
+          await saveFiles(tx, auth.organisationId, row!.id, files)
           await audit(tx, {
             organisationId: auth.organisationId,
             actorMemberId: auth.memberId,
@@ -471,6 +520,33 @@ export function assignmentRoutes(deps: AppDeps) {
         return c.json({ assignment: { id } }, 201)
       })
 
+      // T6.02 Attach files: a one-time upload link; the form sends the path back when it saves.
+      .post('/uploads', async (c) => {
+        const body = await parseBody(c, Upload)
+        const auth = c.var.auth
+        const p = await permissionsOf(deps.sql, auth)
+        if (!p.canCreate || (!p.admin && !p.teaches?.size)) throw forbidden('You can’t attach files to assignments.')
+        const path = `${materialsPrefix(auth.organisationId)}${randomUUID()}/${safeFileName(body.name)}`
+        return c.json({ upload: await deps.storage.createUpload(path) })
+      })
+
+      // Download a brief file or a submitted file (5-minute link).
+      .get('/:id/files/:fileId', async (c) => {
+        const auth = c.var.auth
+        const p = await permissionsOf(deps.sql, auth)
+        const a = await findAssignment(deps.sql, auth, p, c.req.param('id'))
+        const fileId = c.req.param('fileId')
+        if (!uuid.safeParse(fileId).success) throw notFound('File not found.')
+        const [file] = await deps.sql<{ name: string; storage_path: string }[]>`
+          select name, storage_path from public.assignment_materials where id = ${fileId} and assignment_id = ${a.id} and kind = 'file'
+          union all
+          select f.name, f.storage_path from public.submission_files f join public.submissions s on s.id = f.submission_id
+          where f.id = ${fileId} and s.assignment_id = ${a.id}
+        `
+        if (!file) throw notFound('File not found.')
+        return c.json({ url: await deps.storage.downloadUrl(file.storage_path, file.name) })
+      })
+
       // T6.03 / C4.02 Assignment with everyone's status.
       .get('/:id', async (c) => {
         const auth = c.var.auth
@@ -478,8 +554,8 @@ export function assignmentRoutes(deps: AppDeps) {
         const a = await findAssignment(deps.sql, auth, p, c.req.param('id'))
         const [criteria, materials, rows, timeZone] = await Promise.all([
           criteriaOf(deps.sql, a.id),
-          deps.sql<{ id: string; kind: string; name: string; url: string | null }[]>`
-            select id, kind, name, url from public.assignment_materials where assignment_id = ${a.id} order by created_at
+          deps.sql<{ id: string; kind: string; name: string; url: string | null; size_bytes: string | null }[]>`
+            select id, kind, name, url, size_bytes from public.assignment_materials where assignment_id = ${a.id} order by created_at
           `,
           selectRows(deps.sql, a),
           timeZoneOf(deps.sql, auth.organisationId),
@@ -498,6 +574,7 @@ export function assignmentRoutes(deps: AppDeps) {
             dueTime: local[0]!.time,
             criteria,
             links: materials.filter((m) => m.kind === 'link').map((m) => ({ name: m.name, url: m.url })),
+            files: materials.filter((m) => m.kind === 'file').map((m) => ({ id: m.id, name: m.name, size: Number(m.size_bytes ?? 0) })),
             locked: a.submitted > 0,
           },
           participants: people,
@@ -537,7 +614,8 @@ export function assignmentRoutes(deps: AppDeps) {
         const due = await dueAt(deps.sql, auth.organisationId, body.dueDate, body.dueTime)
         const publishing = body.publish && a.published_at === null
         if (publishing && due.getTime() <= Date.now()) throw fieldError('dueDate', 'Choose a due date in the future.')
-        await deps.sql.begin(async (tx) => {
+        const files = await prepareFiles(auth.organisationId, body.files)
+        const removed = await deps.sql.begin(async (tx) => {
           await tx`
             update public.assignments set
               cohort_course_id = ${body.cohortCourseId}, title = ${body.title}, brief = ${body.brief}, due_at = ${due},
@@ -557,6 +635,7 @@ export function assignmentRoutes(deps: AppDeps) {
             }
           }
           await saveLinks(tx, auth.organisationId, a.id, body.links)
+          const gone = await saveFiles(tx, auth.organisationId, a.id, files)
           await audit(tx, {
             organisationId: auth.organisationId,
             actorMemberId: auth.memberId,
@@ -566,7 +645,9 @@ export function assignmentRoutes(deps: AppDeps) {
             data: { title: body.title },
             requestId: c.var.requestId,
           })
+          return gone
         })
+        await deps.storage.remove(removed).catch(() => undefined)
         return c.json({ ok: true })
       })
 
@@ -585,8 +666,8 @@ export function assignmentRoutes(deps: AppDeps) {
           select id, submitted_at, is_late, text_body, link_url, note from public.submissions where assignment_id = ${a.id} and member_id = ${memberId}
         `
         const files = submission
-          ? await deps.sql<{ name: string; size_bytes: string; mime_type: string | null }[]>`
-              select name, size_bytes, mime_type from public.submission_files where submission_id = ${submission.id} order by created_at
+          ? await deps.sql<{ id: string; name: string; size_bytes: string; mime_type: string | null }[]>`
+              select id, name, size_bytes, mime_type from public.submission_files where submission_id = ${submission.id} order by created_at
             `
           : []
         const [grade] = submission
@@ -618,7 +699,7 @@ export function assignmentRoutes(deps: AppDeps) {
                 text: submission.text_body,
                 link: submission.link_url,
                 note: submission.note,
-                files: files.map((f) => ({ name: f.name, size: Number(f.size_bytes), type: f.mime_type })),
+                files: files.map((f) => ({ id: f.id, name: f.name, size: Number(f.size_bytes), type: f.mime_type })),
               }
             : null,
           grade: grade

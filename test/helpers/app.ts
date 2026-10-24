@@ -3,6 +3,7 @@ import { createMembershipLoader } from '../../src/lib/auth.js'
 import type { AuthAdmin } from '../../src/lib/auth-admin.js'
 import type { Sql } from '../../src/lib/db.js'
 import type { EmailMessage, Mailer } from '../../src/lib/mailer.js'
+import type { FileStorage } from '../../src/lib/storage.js'
 
 /** Supabase Auth stand-in backed by the stub auth.users table. */
 export function fakeAuthAdmin(sql: Sql) {
@@ -56,12 +57,38 @@ export function fakeMailer() {
   return { mailer, sent, lastToken }
 }
 
+/** In-memory storage. Tests "upload" with `put` after asking the API for an upload URL. */
+export function fakeStorage() {
+  const objects = new Map<string, { size: number; type: string | null }>()
+  const removed: string[] = []
+  const storage: FileStorage = {
+    async createUpload(path) {
+      return { path, token: `token-${path}`, signedUrl: `https://storage.example/upload/${path}?token=t` }
+    },
+    async stat(path) {
+      return objects.get(path) ?? null
+    },
+    async downloadUrl(path, fileName) {
+      return `https://storage.example/download/${path}?download=${encodeURIComponent(fileName)}`
+    },
+    async remove(paths) {
+      for (const p of paths) {
+        objects.delete(p)
+        removed.push(p)
+      }
+    },
+  }
+  const put = (path: string, size = 1024, type: string | null = 'application/pdf') => objects.set(path, { size, type })
+  return { storage, put, objects, removed }
+}
+
 /**
  * App wired to a real test database. Tokens are "user:<uuid>:<email>" so tests can act as anyone.
  */
 export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
   const auth = fakeAuthAdmin(sql)
   const mail = fakeMailer()
+  const files = fakeStorage()
   const app = createApp({
     corsOrigins: ['http://localhost:5173'],
     appUrl: 'http://localhost:5173',
@@ -73,10 +100,11 @@ export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
     loadMembership: createMembershipLoader(sql),
     authAdmin: auth.admin,
     mailer: mail.mailer,
+    storage: files.storage,
     log: false,
     ...(options.now && { now: options.now }),
   })
-  return { app, auth, mail }
+  return { app, auth, mail, files }
 }
 
 export const as = (userId: string, email: string) => `user:${userId}:${email}`

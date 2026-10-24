@@ -10,6 +10,7 @@ import type { AuthAdmin } from './lib/auth-admin.js'
 import type { Sql } from './lib/db.js'
 import { AppError } from './lib/errors.js'
 import type { Mailer } from './lib/mailer.js'
+import type { FileStorage } from './lib/storage.js'
 import { cohortRoutes } from './routes/cohorts.js'
 import { courseRoutes } from './routes/courses.js'
 import { invitationRoutes } from './routes/invitations.js'
@@ -20,6 +21,7 @@ import { participantRoutes } from './routes/participants.js'
 import { passwordResetRoutes } from './routes/password-reset.js'
 import { assignmentRoutes } from './routes/assignments.js'
 import { programmeRoutes } from './routes/programmes.js'
+import { myRoutes } from './routes/my.js'
 import { sessionRoutes } from './routes/sessions.js'
 
 export interface AppDeps {
@@ -29,6 +31,7 @@ export interface AppDeps {
   sql: Sql
   authAdmin: AuthAdmin
   mailer: Mailer
+  storage: FileStorage
   /** Frontend base URL, for links in emails. */
   appUrl: string
   /** Clock, injectable for tests. */
@@ -70,6 +73,7 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/participants', participantRoutes(deps))
   app.route('/v1/sessions', sessionRoutes(deps))
   app.route('/v1/assignments', assignmentRoutes(deps))
+  app.route('/v1/my', myRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 

@@ -4,6 +4,7 @@ import { createApp, type AppDeps } from '../src/app.js'
 import type { Identity, Membership } from '../src/lib/auth.js'
 import type { AuthAdmin } from '../src/lib/auth-admin.js'
 import type { Sql } from '../src/lib/db.js'
+import type { FileStorage } from '../src/lib/storage.js'
 import { requireRole, type AuthVariables } from '../src/middleware/auth.js'
 
 const identity: Identity = { userId: 'user-1', email: 'ada@aliwa.org' }
@@ -18,6 +19,7 @@ function makeApp(overrides: Partial<AppDeps> = {}) {
     sql: (async () => []) as unknown as Sql,
     authAdmin: {} as AuthAdmin,
     mailer: { send: async () => {} },
+    storage: {} as FileStorage,
     appUrl: 'http://localhost:5173',
     log: false,
     ...overrides,
