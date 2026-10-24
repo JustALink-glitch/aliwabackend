@@ -47,6 +47,11 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/participants/:id/enrolments/:eid/defer` | Owner, admin | B1.05a — optionally into an upcoming cohort in the same programme |
 | `POST` | `/v1/participants/:id/enrolments/:eid/withdraw` | Owner, admin | B1.05b |
 | `POST` | `/v1/participants/:id/enrolments/:eid/transfer` | Owner, admin | B1.05c — old enrolment kept as `transferred` |
+| `GET` | `/v1/sessions?from=&to=&cohortId=` | Owner, admin | C1.01 / A3.04 — sessions (dates are organisation-local), plus attendance to confirm |
+| `POST` | `/v1/sessions` | Owner, admin | C1.02 — one session or a weekly series (up to 200), inside the cohort's dates |
+| `GET` | `/v1/sessions/:id` | Owner, admin | C1.03 — number, series, trainer, expected, attendance and report state |
+| `PATCH` | `/v1/sessions/:id` | Owner, admin | C1.06 / C1.04 — scope `this`, `following` or `all`; held sessions never change |
+| `POST` | `/v1/sessions/:id/cancel` | Owner, admin | C1.05 — reason required; emails participants and the trainer |
 | `GET` | `/v1/invitations/:token` | Link holder | T0 / P0 — who's invited where |
 | `POST` | `/v1/invitations/:token/accept` | Link holder | Set password and join |
 | `POST` | `/v1/invitations/:token/renew` | Link holder, expired link | Sends a fresh link to the invitee |
