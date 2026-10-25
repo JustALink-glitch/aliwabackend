@@ -92,6 +92,7 @@ export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
   const app = createApp({
     corsOrigins: ['http://localhost:5173'],
     appUrl: 'http://localhost:5173',
+    awaitJobs: true,
     sql,
     verifyToken: async (token) => {
       const [kind, userId, email] = token.split(':')

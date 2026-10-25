@@ -26,6 +26,7 @@ import { feedbackRoutes } from './routes/feedback.js'
 import { myRoutes } from './routes/my.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { completionRoutes } from './routes/completion.js'
+import { exportRoutes } from './routes/exports.js'
 import { overviewRoutes } from './routes/overview.js'
 import { reportRoutes } from './routes/reports.js'
 import { settingsRoutes } from './routes/settings.js'
@@ -41,6 +42,8 @@ export interface AppDeps {
   storage: FileStorage
   /** Frontend base URL, for links in emails. */
   appUrl: string
+  /** Wait for background jobs (report generation) before responding. Tests only. */
+  awaitJobs?: boolean
   /** Clock, injectable for tests. */
   now?: () => Date
   /** Show internal error messages in responses. Never true in production. */
@@ -88,6 +91,7 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/settings', settingsRoutes(deps))
   app.route('/v1/session-reports', reportRoutes(deps))
   app.route('/v1/overview', overviewRoutes(deps))
+  app.route('/v1/reports', exportRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 

@@ -60,6 +60,10 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/sessions/:id/resources/uploads` | Staff (assistants if F1.04 allows) | T8.01 — signed upload URL for a resource file |
 | `POST` | `/v1/sessions/:id/resources` | Staff (assistants if F1.04 allows) | T8.01 — add a file or link to the session or the whole course; visible to participants or not |
 | `GET` | `/v1/sessions/:id/resources/:resourceId` | Staff (own courses) | Download link for a resource |
+| `GET` | `/v1/reports` | Owner, admin | E1.01 — generated reports, newest first (status queued, running, ready, failed) |
+| `POST` | `/v1/reports` | Owner, admin | E1.02 — generate a cohort or programme summary, attendance, assignments or feedback report as PDF or CSV |
+| `POST` | `/v1/reports/:id/retry` | Owner, admin | E1.05 — try a failed report again with the same choices |
+| `GET` | `/v1/reports/:id/file` | Owner, admin | E1.04 — the file; downloads are logged |
 | `GET` | `/v1/overview` | Owner, admin | O1.01 — cohorts, participants, attendance (4 weeks and previous), flags, 8 weeks of check-ins, next session per cohort, set-up steps |
 | `GET` | `/v1/trainer/today` | Trainer, assistant | T2.01 — my cohorts, today's sessions, grading queue, attendance and flag counts |
 | `GET` | `/v1/session-reports` | Staff (trainers: courses they report on) | T5.03 / C3.01 — held sessions with report state (due, overdue, submitted) and counts |
