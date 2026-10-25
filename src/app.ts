@@ -1,4 +1,6 @@
+import { timingSafeEqual } from 'node:crypto'
 import { Hono } from 'hono'
+import { runScheduledJobs } from './lib/scheduler.js'
 import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
@@ -49,6 +51,8 @@ export interface AppDeps {
   awaitJobs?: boolean
   /** Clock, injectable for tests. */
   now?: () => Date
+  /** Lets an outside cron run scheduled jobs (POST /v1/internal/run-jobs). Off when unset. */
+  cronSecret?: string
   /** Show internal error messages in responses. Never true in production. */
   exposeErrors?: boolean
   log?: boolean
@@ -98,6 +102,15 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/privacy', privacyRoutes(deps))
   app.route('/v1/notifications', notificationRoutes(deps))
   app.route('/v1/search', searchRoutes(deps))
+
+  // X2: for hosts that sleep between requests, an outside cron can run the scheduled jobs.
+  app.post('/v1/internal/run-jobs', async (c) => {
+    const given = c.req.header('Authorization')?.replace(/^Bearer /, '') ?? ''
+    const expected = deps.cronSecret ?? ''
+    const ok = expected.length > 0 && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+    if (!ok) return c.json({ error: { code: 'not_found', message: 'Not found.' } }, 404)
+    return c.json({ ran: await runScheduledJobs(deps, deps.now?.()) })
+  })
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 

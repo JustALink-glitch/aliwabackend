@@ -54,9 +54,9 @@ describe.skipIf(!TEST_DATABASE_URL)('notifications and search (G1.01, G1.02)', (
     ids.amara = ((await post('/v1/participants', { fullName: 'Amara Okafor', email: 'amara@example.com', cohortId: ids.cohort })).body.participant as { id: string }).id
     ids.bayo = ((await post('/v1/participants', { fullName: 'Amara Bello', email: 'bello@example.com', cohortId: ids.other })).body.participant as { id: string }).id
     await req('POST', `/v1/invitations/${t.mail.lastToken('amara@example.com')}/accept`, { body: { password: 'a-strong-password' } })
-    const [a] = await sql<{ user_id: string }[]>`select user_id from organisation_members where id = ${ids.amara}`
+    const [a] = await sql<{ user_id: string }[]>`select user_id from organisation_members where id = ${ids.amara!}`
     amaraToken = as(a!.user_id, 'amara@example.com')
-    const [cc] = await sql<{ id: string }[]>`select x.id from cohort_courses x join courses c on c.id = x.course_id where x.cohort_id = ${ids.cohort} and c.name like 'Python%'`
+    const [cc] = await sql<{ id: string }[]>`select x.id from cohort_courses x join courses c on c.id = x.course_id where x.cohort_id = ${ids.cohort!} and c.name like 'Python%'`
     ids.cc = cc!.id
   })
 
@@ -87,10 +87,10 @@ describe.skipIf(!TEST_DATABASE_URL)('notifications and search (G1.01, G1.02)', (
 
   it('respects someone switching an event off (F1.09)', async () => {
     await req('PUT', '/v1/me/notification-preferences', { token: femiToken, body: { preferences: [{ event: 'participant_left', email: true, inApp: false }] } })
-    const [enrolment] = await sql<{ id: string }[]>`select id from enrolments where member_id = ${ids.bayo}`
-    await post(`/v1/participants/${ids.bayo}/enrolments/${enrolment!.id}/withdraw`, { reason: 'Moved away', notify: false }, femiToken)
+    const [enrolment] = await sql<{ id: string }[]>`select id from enrolments where member_id = ${ids.bayo!}`
+    await post(`/v1/participants/${ids.bayo!}/enrolments/${enrolment!.id}/withdraw`, { reason: 'Moved away', notify: false }, femiToken)
     // Ada hears; Femi did it himself and has it switched off anyway.
-    expect((await bell()).notifications[0]).toMatchObject({ event: 'participant_left', title: 'Amara Bello withdrawn', body: 'Cohort 6', link: `/admin/participants/${ids.bayo}` })
+    expect((await bell()).notifications[0]).toMatchObject({ event: 'participant_left', title: 'Amara Bello withdrawn', body: 'Cohort 6', link: `/admin/participants/${ids.bayo!}` })
     expect((await bell(femiToken)).notifications.some((n) => n.event === 'participant_left')).toBe(false)
   })
 
@@ -129,12 +129,12 @@ describe.skipIf(!TEST_DATABASE_URL)('notifications and search (G1.01, G1.02)', (
         trainerToken,
       )
     ).body.assignment as { id: string }
-    await sql`insert into submissions (organisation_id, assignment_id, member_id, link_url, submitted_at) select organisation_id, id, ${ids.amara}, 'https://x.y', now() from assignments where id = ${assignment.id}`
-    expect((await req('PUT', `/v1/assignments/${assignment.id}/submissions/${ids.amara}/grade`, { token: trainerToken, body: { points: 78, feedback: 'Good' } })).status).toBe(200)
+    await sql`insert into submissions (organisation_id, assignment_id, member_id, link_url, submitted_at) select organisation_id, id, ${ids.amara!}, 'https://x.y', now() from assignments where id = ${assignment.id}`
+    expect((await req('PUT', `/v1/assignments/${assignment.id}/submissions/${ids.amara!}/grade`, { token: trainerToken, body: { points: 78, feedback: 'Good' } })).status).toBe(200)
 
     const [s] = await sql<{ id: string }[]>`
       insert into sessions (organisation_id, cohort_course_id, title, starts_at, ends_at, trainer_member_id)
-      select organisation_id, id, 'Python for Data Analysis', now() + interval '2 days', now() + interval '2 days 2 hours', ${ids.trainer} from cohort_courses where id = ${ids.cc} returning id
+      select organisation_id, id, 'Python for Data Analysis', now() + interval '2 days', now() + interval '2 days 2 hours', ${ids.trainer!} from cohort_courses where id = ${ids.cc!} returning id
     `
     await req('POST', `/v1/sessions/${s!.id}/resources`, { token: trainerToken, body: { kind: 'link', name: 'Workbook', url: 'https://example.com/w', scope: 'session', visible: true } })
     await post(`/v1/sessions/${s!.id}/cancel`, { reason: 'Trainer unwell', notify: true })
@@ -156,14 +156,14 @@ describe.skipIf(!TEST_DATABASE_URL)('notifications and search (G1.01, G1.02)', (
     ])
     const python = (await get('/v1/search?q=python')).body.groups as Group[]
     expect(python.map((g) => g.kind)).toEqual(['courses', 'sessions'])
-    expect(python[0]!.items[0]).toMatchObject({ title: 'Python for Data Analysis', subtitle: 'Data & AI', link: `/admin/programmes/${ids.programme}` })
+    expect(python[0]!.items[0]).toMatchObject({ title: 'Python for Data Analysis', subtitle: 'Data & AI', link: `/admin/programmes/${ids.programme!}` })
     expect(((await get('/v1/search?q=ngozi')).body.groups as Group[])[0]).toMatchObject({ kind: 'trainers', items: [{ title: 'Ngozi Eze', subtitle: 'Trainer' }] })
     expect((await get('/v1/search?q=a')).body.groups).toEqual([])
     expect((await get('/v1/search?q=%25%25')).body.groups).toEqual([])
 
     // Ngozi teaches Python in Cohort 5 only: she finds Amara Okafor, not Amara Bello, and not SQL.
     const trainer = (await get('/v1/search?q=amara', trainerToken)).body.groups as Group[]
-    expect(trainer[0]!.items.map((i) => [i.title, i.link])).toEqual([['Amara Okafor', `/trainer/participants/${ids.amara}`]])
+    expect(trainer[0]!.items.map((i) => [i.title, i.link])).toEqual([['Amara Okafor', `/trainer/participants/${ids.amara!}`]])
     expect((await get('/v1/search?q=sql', trainerToken)).body.groups).toEqual([])
 
     const participant = (await get('/v1/search?q=sql', amaraToken)).body.groups as Group[]

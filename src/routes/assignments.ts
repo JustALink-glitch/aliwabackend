@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
-import { notify } from '../lib/notifications.js'
+import { deliver } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
@@ -763,13 +763,44 @@ export function assignmentRoutes(deps: AppDeps) {
             data: { assignmentId: a.id, memberId, scorePct: v.scorePct },
             requestId: c.var.requestId,
           })
-          await notify(tx, {
+          return grade!.created
+        }).then(async (created) => {
+          // X2.03: in the participant's bell and inbox, unless they switched it off.
+          const [grader] = await deps.sql<{ first_name: string; last_name: string; time_zone: string }[]>`
+            select m.first_name, m.last_name, o.time_zone from public.organisation_members m join public.organisations o on o.id = m.organisation_id where m.id = ${auth.memberId}
+          `
+          const graded =
+            a.grading_scale === 'points'
+              ? `${v.points} / ${Number(a.max_points)}`
+              : a.grading_scale === 'percentage'
+                ? `${v.percentage}%`
+                : a.grading_scale === 'letter'
+                  ? String(v.letter)
+                  : a.grading_scale === 'pass_fail'
+                    ? v.passed
+                      ? 'Pass'
+                      : 'Not passed yet'
+                    : `${v.scorePct ?? 0}%`
+          const by = `${grader!.first_name} ${grader!.last_name}`
+          await deliver(deps, {
             organisationId: auth.organisationId,
             to: { memberIds: [memberId] },
             event: 'grade_saved',
-            title: grade!.created ? `New grade: ${a.title}` : `Grade updated: ${a.title}`,
+            title: created ? `New grade: ${a.title}` : `Grade updated: ${a.title}`,
             body: body.feedback ? 'Your trainer left feedback.' : null,
             link: `/participant/grades/${a.id}`,
+            email: {
+              subject: `${created ? 'Graded' : 'Grade updated'} — ${a.title}`,
+              title: created ? 'Your work has been graded' : 'Your grade was updated',
+              intro: (first) => `Hi ${first}, ${by} ${created ? 'graded' : 'updated the grade for'} ${a.title}${body.feedback ? ' and left feedback' : ''}.`,
+              details: [
+                { label: 'Grade', value: graded },
+                { label: 'Course', value: a.course_name },
+                { label: 'Graded', value: new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: grader!.time_zone }).format(new Date()).replace(',', '') },
+              ],
+              buttonLabel: 'View feedback',
+              footer: 'You get this because grade notifications are on. Change them in Settings › Notifications.',
+            },
           })
         })
         return c.json({ ok: true })

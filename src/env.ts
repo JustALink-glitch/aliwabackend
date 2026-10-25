@@ -21,6 +21,10 @@ const EnvSchema = z.object({
   /** Optional: without it, emails are printed to the console. */
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('Synqop <onboarding@resend.dev>'),
+  /** Reminders, digests and the 30-day deletion run every minute inside the API. "off" if an outside cron calls /v1/internal/run-jobs instead. */
+  SCHEDULER: z.enum(['on', 'off']).default('on'),
+  /** Optional: lets an outside cron call POST /v1/internal/run-jobs with "Authorization: Bearer <CRON_SECRET>". */
+  CRON_SECRET: z.string().min(24, 'CRON_SECRET must be at least 24 characters').optional(),
 })
 
 export type Env = z.infer<typeof EnvSchema>

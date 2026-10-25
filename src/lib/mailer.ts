@@ -44,6 +44,8 @@ const escapeHtml = (value: string) =>
 export function renderEmail(input: {
   title: string
   intro: string
+  /** Label / value rows under the intro (X2 frames: When, Where, Trainer…). */
+  details?: { label: string; value: string }[]
   buttonLabel: string
   buttonUrl: string
   note?: string
@@ -57,6 +59,7 @@ export function renderEmail(input: {
     '',
     input.intro,
     '',
+    ...(input.details?.length ? [...input.details.map((d) => `${d.label}: ${d.value}`), ''] : []),
     `${input.buttonLabel}: ${input.buttonUrl}`,
     input.note ? `\n${input.note}` : '',
     input.footer ? `\n${input.footer}` : '',
@@ -72,6 +75,16 @@ export function renderEmail(input: {
         <tr><td style="font-size:15px;font-weight:600;color:#2563EB;padding-bottom:24px">Synqop</td></tr>
         <tr><td style="font-size:20px;line-height:28px;font-weight:600;padding-bottom:12px">${escapeHtml(input.title)}</td></tr>
         <tr><td style="font-size:14px;line-height:20px;color:#5C6777;padding-bottom:24px">${escapeHtml(input.intro)}</td></tr>
+        ${
+          input.details?.length
+            ? `<tr><td style="padding-bottom:24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #E7ECF1;border-radius:8px;border-collapse:separate">${input.details
+                .map(
+                  (d, i) =>
+                    `<tr><td style="font-size:13px;color:#76808D;padding:10px 12px;width:35%;vertical-align:top${i ? ';border-top:1px solid #E7ECF1' : ''}">${escapeHtml(d.label)}</td><td style="font-size:13px;color:#151B24;padding:10px 12px;vertical-align:top${i ? ';border-top:1px solid #E7ECF1' : ''}">${escapeHtml(d.value)}</td></tr>`,
+                )
+                .join('')}</table></td></tr>`
+            : ''
+        }
         <tr><td style="padding-bottom:24px">
           <a href="${escapeHtml(input.buttonUrl)}" style="display:inline-block;background:#2563EB;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:600;padding:10px 16px;border-radius:8px">${escapeHtml(input.buttonLabel)}</a>
         </td></tr>

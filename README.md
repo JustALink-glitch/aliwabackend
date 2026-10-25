@@ -218,3 +218,23 @@ npm run dev            # http://localhost:5000/health
 
 See *Proposals to confirm* in the development reference (§12). Invitation links (72 h) are longer than Supabase's
 maximum email-link lifetime, so the API issues its own: 256-bit random, stored only as a SHA-256 hash, single use.
+
+## Scheduled jobs (X2)
+
+Every minute the API checks, for each active organisation:
+
+| Job | Who hears | Setting |
+|---|---|---|
+| Session reminder (X2.01) | Participants in the cohort | `session_reminder_minutes_before` (60) |
+| Assignment due (X2.02) | Participants who haven't submitted | `assignment_reminder_hours_before` (24) |
+| Report due soon, then overdue (F1.08, X2.05) | Session trainer by email; admins in-app when overdue | Session reports settings |
+| Attendance not recorded (F1.07) | Session trainer; admins in-app | Attendance & Zoom › Remind the trainer |
+| Daily digest (X2.06) | Each admin at their digest time, only when there are new flags or overdue reports | Notifications |
+| Delete organisation (F1.11) | Removes everything, files and sign-ins included, once the 30 days pass | Data & privacy |
+
+Each message is claimed in `delivery_log` before it is sent, so it goes out once even if the API restarts or runs
+on several machines. Missed alerts are only sent if they're recent (a few days), so turning the API back on
+doesn't flood anyone. Everyone's Email / In-app choices are respected.
+
+Hosts that sleep between requests can set `SCHEDULER=off` and have a cron call
+`POST /v1/internal/run-jobs` with `Authorization: Bearer <CRON_SECRET>` every few minutes.
