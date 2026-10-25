@@ -20,7 +20,8 @@ export async function staffScope(sql: Sql | Tx, auth: AuthContext): Promise<Staf
   if (isAdmin(auth)) return { admin: true, assistant: false, teaches: null, assistantCan: { attendance: true, resources: true, reports: false } }
   const [[s], rows] = await Promise.all([
     sql<{ attendance: boolean; resources: boolean; reports: boolean }[]>`
-      select assistant_can_take_attendance as attendance, assistant_can_add_resources as resources, assistant_can_write_reports as reports
+      select assistant_can_take_attendance and assistants_enabled as attendance, assistant_can_add_resources and assistants_enabled as resources,
+             assistant_can_write_reports and assistants_enabled as reports
       from public.organisation_settings where organisation_id = ${auth.organisationId}
     `,
     sql<{ id: string }[]>`select cohort_course_id as id from public.cohort_course_trainers where member_id = ${auth.memberId}`,

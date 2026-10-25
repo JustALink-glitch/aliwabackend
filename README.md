@@ -18,12 +18,16 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | Method | Path | Who | Screen |
 |---|---|---|---|
 | `POST` | `/v1/organisations` | Signed in, no organisation yet | R1 — creates the organisation; caller becomes owner |
-| `GET` | `/v1/me` | Any member | User, membership, organisation |
+| `GET` | `/v1/me` | Any member | User, membership (with display name and last sign-in), organisation |
+| `PATCH` | `/v1/me` | Any member | P8.01 / G1.04 — full name, display name, phone |
+| `GET` `PUT` | `/v1/me/notification-preferences` | Any member | P8.02 / F1.09 — email and in-app per event; admins also set a digest time |
 | `GET` | `/v1/members?role=&status=` | Owner, admin | B1 / B2 lists (`role` takes a comma list) |
 | `GET` | `/v1/members/:id` | Owner, admin | B2.02 — person, who invited them, invitation history |
 | `POST` | `/v1/members` | Owner, admin | B1.02 / B2.03 — invite; emails a 72-hour link |
 | `POST` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — resend (old link stops working) |
 | `DELETE` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — revoke: cancels the link and removes the not-yet-joined person |
+| `PATCH` | `/v1/members/:id/role` | Owner, admin | F1.02b — admin, trainer or assistant trainer; never the owner or yourself |
+| `DELETE` | `/v1/members/:id` | Owner, admin | F1.02c — remove: no more sign-in, off what they teach; their records stay. Invite the same email to bring them back |
 | `GET` | `/v1/programmes` | Owner, admin | A1.01 — programmes with status (Draft · Active · Archived) and counts |
 | `POST` | `/v1/programmes` | Owner, admin | A1.03 — name, description, lead (an admin), outcomes |
 | `GET` | `/v1/programmes/:id` | Owner, admin | A1.02 — programme, outcomes, cohorts, courses |
@@ -109,6 +113,9 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/completion/certificates/:id` | Owner, admin | A certificate as printed |
 | `GET` | `/v1/completion/outcomes` | Owner, admin | D3.01 — outcomes for a programme (optionally one cohort), counts per option |
 | `POST` | `/v1/completion/outcomes` | Owner, admin | D3.02 — record (or update) an outcome for someone who completed |
+| `GET` `PUT` | `/v1/settings/organisation` | Owner, admin | F1.01 — name, type, country, time zone; owner and created date |
+| `GET` `PUT` | `/v1/settings/programme-setup` | Owner, admin | F1.04 — course library, trainer assignment, assistants, multi-cohort, grading scales, feedback |
+| `GET` `PUT` | `/v1/settings/attendance` | Owner, admin | F1.07 — join links, present %, late arrivals, recordings, in-person reminder; Zoom connection status |
 | `GET` `PUT` | `/v1/settings/completion` | Owner, admin | F1.05 — completion criteria, issuing, signatory, certificate title, default outcomes |
 | `GET` `PUT` | `/v1/settings/attention-rules` | Owner, admin | F1.06 — signals, who sees flags, how they close; with how many are flagged now |
 | `GET` | `/v1/my/progress` | Participant | P7.01 — progress against the completion rule |

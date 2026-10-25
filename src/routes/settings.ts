@@ -3,8 +3,9 @@ import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { refreshFlags, ruleSettings } from '../lib/attention.js'
 import { completionRule } from '../lib/completion.js'
-import { audit } from '../lib/db.js'
-import { parseBody, uuid } from '../lib/validation.js'
+import { audit, type Tx } from '../lib/db.js'
+import { parseBody, timeZone, uuid } from '../lib/validation.js'
+import { shortName } from '../lib/names.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 import { signedBy } from './completion.js'
 
@@ -57,7 +58,47 @@ const ReportSettings = z.object({
     .max(10, 'Keep it to 10 questions.'),
 })
 
-/** /v1/settings — F1.05 Completion & certificates, F1.06 Needs attention rules, F1.08 Session reports (owners and admins). */
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => v || null)
+
+const Organisation = z.object({
+  name: z.string().trim().min(1, 'Enter your organisation’s name.').max(120, 'Use 120 characters or fewer.'),
+  type: optionalText(60),
+  country: z
+    .preprocess((v) => (v === '' ? null : v), z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Choose a country.').nullish())
+    .transform((v) => v ?? null),
+  timeZone,
+})
+
+const GRADING_SCALES = ['points', 'percentage', 'letter', 'pass_fail', 'rubric'] as const
+
+const ProgrammeSetup = z.object({
+  courseLibrary: z.enum(['shared', 'per_cohort']),
+  trainerAssignment: z.enum(['course', 'cohort']),
+  assistantsEnabled: z.boolean(),
+  assistantCan: z.object({ attendance: z.boolean(), resources: z.boolean(), grade: z.boolean(), assignments: z.boolean(), reports: z.boolean() }),
+  multiCohort: z.boolean(),
+  gradingScales: z
+    .array(z.enum(GRADING_SCALES))
+    .min(1, 'Allow at least one scale.')
+    .transform((v) => GRADING_SCALES.filter((x) => v.includes(x))),
+  feedbackEnabled: z.boolean(),
+})
+
+const Attendance = z.object({
+  joinLinks: z.enum(['personal', 'shared']),
+  presentMinPct: pct.refine((v) => v >= 1, 'Use 1 to 100.'),
+  late: z.object({ enabled: z.boolean(), minutes: z.coerce.number({ error: 'Enter minutes.' }).int('Use whole minutes.').min(1, 'Use 1 minute or more.').max(240, 'Use 240 minutes or fewer.') }),
+  recordings: z.object({ shared: z.boolean(), days: z.coerce.number({ error: 'Enter days.' }).int('Use whole days.').min(1, 'Use 1 day or more.').max(365, 'Use 365 days or fewer.') }),
+  inPersonReminder: z.object({ enabled: z.boolean(), hours: z.coerce.number({ error: 'Enter hours.' }).int('Use whole hours.').min(1, 'Use 1 hour or more.').max(72, 'Use 72 hours or fewer.') }),
+})
+
+/** /v1/settings — F1.01 Organisation details, F1.04 Programme setup, F1.07 Attendance & Zoom, F1.05 Completion & certificates, F1.06 Needs attention rules, F1.08 Session reports (owners and admins). */
 export function settingsRoutes(deps: AppDeps) {
   const now = () => (deps.now ? deps.now() : new Date())
 
@@ -113,9 +154,133 @@ export function settingsRoutes(deps: AppDeps) {
     return { dueHours: s!.hours, remind: s!.remind, overdueOnOverview: s!.overview, questions }
   }
 
+  async function organisationView(organisationId: string) {
+    const [[o], [owner]] = await Promise.all([
+      deps.sql<{ name: string; type: string | null; country: string | null; time_zone: string; created_at: Date }[]>`
+        select name, type, country, time_zone, created_at from public.organisations where id = ${organisationId}
+      `,
+      deps.sql<{ first_name: string; last_name: string }[]>`
+        select first_name, last_name from public.organisation_members
+        where organisation_id = ${organisationId} and role = 'owner' and status <> 'deactivated' order by created_at limit 1
+      `,
+    ])
+    return { name: o!.name, type: o!.type, country: o!.country, timeZone: o!.time_zone, owner: owner ? shortName(owner.first_name, owner.last_name) : null, createdAt: o!.created_at }
+  }
+
+  async function programmeSetup(organisationId: string) {
+    const [s] = await deps.sql<
+      {
+        library: 'shared' | 'per_cohort'
+        assignment: 'course' | 'cohort'
+        assistants: boolean
+        attendance: boolean
+        resources: boolean
+        grade: boolean
+        assignments: boolean
+        reports: boolean
+        multi: boolean
+        scales: string[]
+        feedback: boolean
+      }[]
+    >`
+      select course_library_mode as library, trainer_assignment as assignment, assistants_enabled as assistants,
+             assistant_can_take_attendance as attendance, assistant_can_add_resources as resources, assistant_can_grade as grade,
+             assistant_can_create_assignments as assignments, assistant_can_write_reports as reports,
+             allow_multi_cohort_enrolment as multi, allowed_grading_scales::text[] as scales, session_feedback_enabled as feedback
+      from public.organisation_settings where organisation_id = ${organisationId}
+    `
+    return {
+      courseLibrary: s!.library,
+      trainerAssignment: s!.assignment,
+      assistantsEnabled: s!.assistants,
+      assistantCan: { attendance: s!.attendance, resources: s!.resources, grade: s!.grade, assignments: s!.assignments, reports: s!.reports },
+      multiCohort: s!.multi,
+      gradingScales: GRADING_SCALES.filter((x) => s!.scales.includes(x)),
+      feedbackEnabled: s!.feedback,
+    }
+  }
+
+  async function attendanceSettings(organisationId: string) {
+    const [[s], [zoom]] = await Promise.all([
+      deps.sql<
+        { links: 'personal' | 'shared'; present: number; late_on: boolean; late: number; rec_on: boolean; rec_days: number; remind_on: boolean; remind: number }[]
+      >`
+        select join_link_mode as links, zoom_present_min_pct::int as present, zoom_late_enabled as late_on, zoom_late_after_minutes as late,
+               recordings_shared as rec_on, recording_retention_days as rec_days, in_person_reminder_enabled as remind_on, in_person_reminder_hours as remind
+        from public.organisation_settings where organisation_id = ${organisationId}
+      `,
+      deps.sql<{ email: string | null }[]>`select zoom_user_email as email from public.zoom_connections where organisation_id = ${organisationId}`,
+    ])
+    return {
+      zoom: zoom ? { connected: true, email: zoom.email } : { connected: false, email: null },
+      joinLinks: s!.links,
+      presentMinPct: s!.present,
+      late: { enabled: s!.late_on, minutes: s!.late },
+      recordings: { shared: s!.rec_on, days: s!.rec_days },
+      inPersonReminder: { enabled: s!.remind_on, hours: s!.remind },
+    }
+  }
+
+  const changed = (tx: Tx, auth: { organisationId: string; memberId: string }, action: string, requestId: string | undefined) =>
+    audit(tx, { organisationId: auth.organisationId, actorMemberId: auth.memberId, action, entityType: 'organisation', entityId: auth.organisationId, requestId })
+
   return (
     new Hono<{ Variables: AuthVariables }>()
       .use(requireAuth(deps), requireRole('owner', 'admin'))
+
+      .get('/organisation', async (c) => c.json({ settings: await organisationView(c.var.auth.organisationId) }))
+
+      .put('/organisation', async (c) => {
+        const body = await parseBody(c, Organisation)
+        const auth = c.var.auth
+        await deps.sql.begin(async (tx) => {
+          await tx`
+            update public.organisations set name = ${body.name}, type = ${body.type}, country = ${body.country}, time_zone = ${body.timeZone}
+            where id = ${auth.organisationId}
+          `
+          await changed(tx, auth, 'settings.organisation_updated', c.var.requestId)
+        })
+        return c.json({ settings: await organisationView(auth.organisationId) })
+      })
+
+      .get('/programme-setup', async (c) => c.json({ settings: await programmeSetup(c.var.auth.organisationId) }))
+
+      .put('/programme-setup', async (c) => {
+        const body = await parseBody(c, ProgrammeSetup)
+        const auth = c.var.auth
+        await deps.sql.begin(async (tx) => {
+          await tx`
+            update public.organisation_settings set
+              course_library_mode = ${body.courseLibrary}, trainer_assignment = ${body.trainerAssignment}, assistants_enabled = ${body.assistantsEnabled},
+              assistant_can_take_attendance = ${body.assistantCan.attendance}, assistant_can_add_resources = ${body.assistantCan.resources},
+              assistant_can_grade = ${body.assistantCan.grade}, assistant_can_create_assignments = ${body.assistantCan.assignments},
+              assistant_can_write_reports = ${body.assistantCan.reports}, allow_multi_cohort_enrolment = ${body.multiCohort},
+              allowed_grading_scales = ${body.gradingScales}::public.grading_scale[], session_feedback_enabled = ${body.feedbackEnabled}, updated_at = now()
+            where organisation_id = ${auth.organisationId}
+          `
+          await changed(tx, auth, 'settings.programme_setup_updated', c.var.requestId)
+        })
+        return c.json({ settings: await programmeSetup(auth.organisationId) })
+      })
+
+      .get('/attendance', async (c) => c.json({ settings: await attendanceSettings(c.var.auth.organisationId) }))
+
+      .put('/attendance', async (c) => {
+        const body = await parseBody(c, Attendance)
+        const auth = c.var.auth
+        await deps.sql.begin(async (tx) => {
+          await tx`
+            update public.organisation_settings set
+              join_link_mode = ${body.joinLinks}, zoom_present_min_pct = ${body.presentMinPct},
+              zoom_late_enabled = ${body.late.enabled}, zoom_late_after_minutes = ${body.late.minutes},
+              recordings_shared = ${body.recordings.shared}, recording_retention_days = ${body.recordings.days},
+              in_person_reminder_enabled = ${body.inPersonReminder.enabled}, in_person_reminder_hours = ${body.inPersonReminder.hours}, updated_at = now()
+            where organisation_id = ${auth.organisationId}
+          `
+          await changed(tx, auth, 'settings.attendance_updated', c.var.requestId)
+        })
+        return c.json({ settings: await attendanceSettings(auth.organisationId) })
+      })
 
       .get('/session-reports', async (c) => c.json({ settings: await reportSettings(c.var.auth.organisationId) }))
 

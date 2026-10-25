@@ -7,7 +7,24 @@ import { fullName, parseBody } from '../lib/validation.js'
 import { requireAuth, type AuthVariables } from '../middleware/auth.js'
 
 /** Notification events people can tune, by role, with their defaults (P8.01 / P8.02). */
-const EVENTS: Partial<Record<Role, { key: string; label: string; when: string; email: boolean; inApp: boolean }[]>> = {
+type Event = { key: string; label: string; when: string; email: boolean; inApp: boolean }
+
+/** F1.09 Owners and admins. */
+const ADMIN_EVENTS: Event[] = [
+  { key: 'attention_flags', label: 'New Needs attention flags', when: 'Daily digest', email: true, inApp: true },
+  { key: 'report_overdue', label: 'Session report overdue', when: '', email: false, inApp: true },
+  { key: 'attendance_missing', label: 'Attendance not recorded', when: '2 hours after a session ends', email: false, inApp: true },
+  { key: 'zoom_review', label: 'Zoom attendees to review', when: 'Names Synqop couldn’t match', email: false, inApp: true },
+  { key: 'participant_left', label: 'Participant deferred or withdrawn', when: '', email: true, inApp: true },
+  { key: 'certificate_eligible', label: 'Participants eligible for a certificate', when: '', email: true, inApp: true },
+  { key: 'import_finished', label: 'Import finished', when: '', email: false, inApp: true },
+  { key: 'report_ready', label: 'Report ready to download', when: '', email: false, inApp: true },
+  { key: 'invitation_accepted', label: 'Invitation accepted', when: 'Trainers and members', email: false, inApp: true },
+]
+
+const EVENTS: Partial<Record<Role, Event[]>> = {
+  owner: ADMIN_EVENTS,
+  admin: ADMIN_EVENTS,
   participant: [
     { key: 'session_starting', label: 'Session starting soon', when: '1 hour before', email: true, inApp: true },
     { key: 'assignment_due', label: 'Assignment due', when: '24 hours before', email: true, inApp: true },
@@ -19,6 +36,13 @@ const EVENTS: Partial<Record<Role, { key: string; label: string; when: string; e
 
 const Profile = z.object({
   fullName,
+  // G1.04: how the name appears in the top bar and history. Empty = "First L.".
+  displayName: z
+    .string()
+    .trim()
+    .max(80, 'Use 80 characters or fewer.')
+    .nullish()
+    .transform((value) => (value === undefined ? undefined : value || null)),
   phone: z
     .string()
     .trim()
@@ -30,6 +54,11 @@ const Profile = z.object({
 
 const Preferences = z.object({
   preferences: z.array(z.object({ event: z.string(), email: z.boolean(), inApp: z.boolean() })).max(20),
+  /** F1.09 Digest time, "08:00", in the organisation's time zone. Only for roles with a daily digest. */
+  digestTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Choose a time.')
+    .optional(),
 })
 
 /** /v1/me — who is signed in, their organisation and role; their profile and notification settings. */
@@ -42,12 +71,16 @@ export function meRoutes(deps: AppDeps) {
         select name, time_zone from public.organisations where id = ${organisationId}
       `
       // Name shown in the top bar and account menu (G1.03).
-      const [member] = await deps.sql<{ first_name: string; last_name: string; phone: string | null }[]>`
-        select first_name, last_name, phone from public.organisation_members where id = ${memberId}
+      const [member] = await deps.sql<{ first_name: string; last_name: string; phone: string | null; display_name: string | null; last_sign_in_at: Date | null }[]>`
+        select m.first_name, m.last_name, m.phone, m.display_name, u.last_sign_in_at
+        from public.organisation_members m left join auth.users u on u.id = m.user_id where m.id = ${memberId}
       `
       return c.json({
         user: { id: userId, email },
-        membership: { id: memberId, organisationId, role, firstName: member?.first_name ?? '', lastName: member?.last_name ?? '', phone: member?.phone ?? null },
+        membership: { id: memberId, organisationId, role, firstName: member?.first_name ?? '', lastName: member?.last_name ?? '', phone: member?.phone ?? null,
+          displayName: member?.display_name ?? null,
+          lastSignInAt: member?.last_sign_in_at ?? null,
+        },
         organisation: organisation ? { id: organisationId, name: organisation.name, timeZone: organisation.time_zone } : null,
       })
     })
@@ -59,7 +92,8 @@ export function meRoutes(deps: AppDeps) {
       await deps.sql.begin(async (tx) => {
         await tx`
           update public.organisation_members
-          set first_name = ${body.fullName.firstName}, last_name = ${body.fullName.lastName}, phone = ${body.phone}, updated_at = now()
+          set first_name = ${body.fullName.firstName}, last_name = ${body.fullName.lastName}, phone = ${body.phone},
+              ${body.displayName !== undefined ? tx`display_name = ${body.displayName},` : tx``} updated_at = now()
           where id = ${memberId}
         `
         await audit(tx, {
@@ -79,10 +113,17 @@ export function meRoutes(deps: AppDeps) {
     .get('/notification-preferences', async (c) => {
       const { memberId, role } = c.var.auth
       const events = EVENTS[role] ?? []
-      const saved = await deps.sql<{ event: string; email: boolean; in_app: boolean }[]>`
-        select event, email, in_app from public.notification_preferences where member_id = ${memberId}
-      `
+      const [saved, [digest]] = await Promise.all([
+        deps.sql<{ event: string; email: boolean; in_app: boolean }[]>`
+          select event, email, in_app from public.notification_preferences where member_id = ${memberId}
+        `,
+        deps.sql<{ time: string }[]>`
+          select to_char(coalesce(m.digest_time, s.digest_local_time), 'HH24:MI') as time
+          from public.organisation_members m join public.organisation_settings s on s.organisation_id = m.organisation_id where m.id = ${memberId}
+        `,
+      ])
       return c.json({
+        digestTime: digest?.time ?? '08:00',
         preferences: events.map((e) => {
           const row = saved.find((s) => s.event === e.key)
           return { event: e.key, label: e.label, when: e.when, email: row?.email ?? e.email, inApp: row?.in_app ?? e.inApp }
@@ -100,6 +141,9 @@ export function meRoutes(deps: AppDeps) {
           values (${organisationId}, ${memberId}, ${p.event}, ${p.email}, ${p.inApp})
           on conflict (member_id, event) do update set email = excluded.email, in_app = excluded.in_app, updated_at = now()
         `
+      }
+      if (body.digestTime && (role === 'owner' || role === 'admin')) {
+        await deps.sql`update public.organisation_members set digest_time = ${body.digestTime}::time where id = ${memberId}`
       }
       return c.json({ ok: true })
     })

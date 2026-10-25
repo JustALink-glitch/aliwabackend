@@ -92,7 +92,7 @@ async function permissionsOf(sql: Sql | Tx, auth: AuthContext): Promise<Permissi
   if (isAdmin(auth)) return { admin: true, teaches: null, canCreate: true, canGrade: true }
   const [[settings], rows] = await Promise.all([
     sql<{ create: boolean; grade: boolean }[]>`
-      select assistant_can_create_assignments as create, assistant_can_grade as grade
+      select assistant_can_create_assignments and assistants_enabled as create, assistant_can_grade and assistants_enabled as grade
       from public.organisation_settings where organisation_id = ${auth.organisationId}
     `,
     sql<{ id: string }[]>`select cohort_course_id as id from public.cohort_course_trainers where member_id = ${auth.memberId}`,

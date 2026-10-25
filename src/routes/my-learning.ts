@@ -127,6 +127,11 @@ export function myLearningRoutes(deps: AppDeps) {
     return row!.time_zone
   }
 
+  async function feedbackOn(organisationId: string) {
+    const [row] = await deps.sql<{ on: boolean }[]>`select session_feedback_enabled as on from public.organisation_settings where organisation_id = ${organisationId}`
+    return row?.on ?? true
+  }
+
   async function resourcesOf(cohortCourseId: string, sessionId?: string) {
     return deps.sql<{ id: string; kind: 'file' | 'link'; name: string; url: string | null; size_bytes: string | null; session_id: string | null }[]>`
       select id, kind, name, url, size_bytes, session_id from public.resources
@@ -206,17 +211,18 @@ export function myLearningRoutes(deps: AppDeps) {
         if (!uuid.safeParse(id).success) throw notFound('Session not found.')
         const [row] = await selectMySessions(deps.sql, c.var.auth, { id })
         if (!row) throw notFound('Session not found.')
-        const [resources, timeZone, [feedback]] = await Promise.all([
+        const [resources, timeZone, [feedback], on] = await Promise.all([
           resourcesOf(row.cohort_course_id, row.id),
           timeZoneOf(c.var.auth.organisationId),
           deps.sql<{ rating: number; comment: string | null }[]>`select rating, comment from public.session_feedback where session_id = ${row.id} and member_id = ${c.var.auth.memberId}`,
+          feedbackOn(c.var.auth.organisationId),
         ])
         return c.json({
           timeZone,
           session: toSession(row, now()),
           resources: resources.map(toResource),
-          // P4.03 Feedback opens once the session has been held.
-          feedback: { canRate: row.status === 'held', mine: feedback ? { rating: feedback.rating, comment: feedback.comment } : null },
+          // P4.03 Feedback opens once the session has been held, if the organisation asks for it (F1.04).
+          feedback: { canRate: on && row.status === 'held', mine: feedback ? { rating: feedback.rating, comment: feedback.comment } : null },
         })
       })
 
@@ -229,6 +235,7 @@ export function myLearningRoutes(deps: AppDeps) {
         const [row] = await selectMySessions(deps.sql, auth, { id })
         if (!row) throw notFound('Session not found.')
         if (row.status !== 'held') throw new AppError(409, 'session_not_held', 'You can rate a session once it has ended.')
+        if (!(await feedbackOn(auth.organisationId))) throw new AppError(409, 'feedback_off', 'Your programme team isn’t collecting session feedback.')
         await deps.sql.begin(async (tx) => {
           const [saved] = await tx<{ id: string }[]>`
             insert into public.session_feedback (organisation_id, session_id, member_id, rating, comment)

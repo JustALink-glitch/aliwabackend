@@ -143,8 +143,9 @@ export function invitationRoutes(deps: AppDeps) {
       let userId = await deps.authAdmin.findUserIdByEmail(preview.email)
       let createdUserId: string | null = null
       if (userId) {
+        // Someone removed and invited back keeps their account (F1.02c).
         const [linked] = await deps.sql`
-          select 1 from public.organisation_members where user_id = ${userId}
+          select 1 from public.organisation_members where user_id = ${userId} and id <> ${preview.member_id}
         `
         if (linked) {
           throw new AppError(409, 'account_exists', 'An account with this email already exists. Sign in instead.')
