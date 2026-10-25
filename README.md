@@ -116,6 +116,10 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` `PUT` | `/v1/settings/organisation` | Owner, admin | F1.01 — name, type, country, time zone; owner and created date |
 | `GET` `PUT` | `/v1/settings/programme-setup` | Owner, admin | F1.04 — course library, trainer assignment, assistants, multi-cohort, grading scales, feedback |
 | `GET` `PUT` | `/v1/settings/attendance` | Owner, admin | F1.07 — join links, present %, late arrivals, recordings, in-person reminder; Zoom connection status |
+| `GET` | `/v1/privacy` | Owner, admin | F1.10 — recent exports and deletion status (`canManage` for the owner) |
+| `POST` | `/v1/privacy/exports` | Owner | F1.10 — ZIP of CSVs (and submission files if asked), ready for 7 days; emails the owner |
+| `GET` | `/v1/privacy/exports/:id/file` | Owner | F1.10 — download the ZIP |
+| `POST` `DELETE` | `/v1/privacy/deletion` | Owner | F1.11 — schedule (type the name; read-only for 30 days, everyone emailed) or cancel |
 | `GET` `PUT` | `/v1/settings/completion` | Owner, admin | F1.05 — completion criteria, issuing, signatory, certificate title, default outcomes |
 | `GET` `PUT` | `/v1/settings/attention-rules` | Owner, admin | F1.06 — signals, who sees flags, how they close; with how many are flagged now |
 | `GET` | `/v1/my/progress` | Participant | P7.01 — progress against the completion rule |

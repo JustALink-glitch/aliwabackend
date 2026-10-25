@@ -299,9 +299,10 @@ export function periodLabel(from: string | null, to: string | null): string {
 const localDate = (d: Date, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
 const localTime = (d: Date, tz: string) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(d)
 
-const csvCell = (v: string | number) => {
-  const s = String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+export const csvCell = (v: string | number | null | undefined) => {
+  // Text starting with = + - @ would run as a formula in Excel; a leading apostrophe keeps it as text.
+  const s = v === null || v === undefined ? '' : typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? `'${v}` : String(v)
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /** CSV: one block per section, separated by a blank line. UTF-8 with BOM so Excel reads it correctly. */

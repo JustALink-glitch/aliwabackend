@@ -27,6 +27,9 @@ export function requireIdentity(deps: { verifyToken: VerifyToken }) {
   })
 }
 
+/** Writes still allowed while an organisation is scheduled for deletion. */
+const READ_ONLY_ALLOWED = ['/v1/privacy', '/v1/reports']
+
 /**
  * Requires a valid token and an active organisation membership.
  * Sets `c.var.auth` — the only trusted source of user, organisation and role.
@@ -41,6 +44,11 @@ export function requireAuth(deps: { verifyToken: VerifyToken; loadMembership: Lo
       throw membership.reason === 'no_organisation'
         ? new AppError(403, 'no_organisation', 'This account has not set up or joined an organisation yet.')
         : new AppError(403, 'access_ended', 'Your access to this organisation has ended. Contact your administrator.')
+    }
+    // F1.11b: while deletion is scheduled people can read and download, but not change anything.
+    // Owners can still export data, generate reports and cancel the deletion.
+    if (membership.readOnly && !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && !READ_ONLY_ALLOWED.some((p) => c.req.path.startsWith(p))) {
+      throw new AppError(423, 'read_only', 'This workspace is scheduled for deletion, so nothing can be changed. An owner can cancel the deletion in Settings › Data & privacy.')
     }
     c.set('identity', identity)
     c.set('auth', { ...identity, ...membership })

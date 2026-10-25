@@ -67,8 +67,8 @@ export function meRoutes(deps: AppDeps) {
     .use(requireAuth(deps))
     .get('/', async (c) => {
       const { userId, email, organisationId, role, memberId } = c.var.auth
-      const [organisation] = await deps.sql<{ name: string; time_zone: string }[]>`
-        select name, time_zone from public.organisations where id = ${organisationId}
+      const [organisation] = await deps.sql<{ name: string; time_zone: string; deletion_scheduled_for: Date | null }[]>`
+        select name, time_zone, deletion_scheduled_for from public.organisations where id = ${organisationId}
       `
       // Name shown in the top bar and account menu (G1.03).
       const [member] = await deps.sql<{ first_name: string; last_name: string; phone: string | null; display_name: string | null; last_sign_in_at: Date | null }[]>`
@@ -81,7 +81,9 @@ export function meRoutes(deps: AppDeps) {
           displayName: member?.display_name ?? null,
           lastSignInAt: member?.last_sign_in_at ?? null,
         },
-        organisation: organisation ? { id: organisationId, name: organisation.name, timeZone: organisation.time_zone } : null,
+        organisation: organisation
+          ? { id: organisationId, name: organisation.name, timeZone: organisation.time_zone, deletionScheduledFor: organisation.deletion_scheduled_for }
+          : null,
       })
     })
 

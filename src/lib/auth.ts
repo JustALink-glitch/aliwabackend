@@ -13,6 +13,8 @@ export interface Membership {
   memberId: string
   organisationId: string
   role: Role
+  /** The organisation is scheduled for deletion (F1.11b): nothing can be changed. */
+  readOnly?: boolean
 }
 
 export type AuthContext = Identity & Membership
@@ -49,13 +51,15 @@ export function createTokenVerifier(supabaseUrl: string): VerifyToken {
 /** Looks up the user's membership. Only an active member gets access. */
 export function createMembershipLoader(sql: Sql): LoadMembership {
   return async (userId) => {
-    const [row] = await sql<{ id: string; organisation_id: string; role: string; status: string }[]>`
-      select id, organisation_id, role, status
-      from public.organisation_members
-      where user_id = ${userId}
+    const [row] = await sql<{ id: string; organisation_id: string; role: string; status: string; deleting: boolean; deleted: boolean }[]>`
+      select m.id, m.organisation_id, m.role, m.status,
+             o.status = 'pending_deletion' as deleting, coalesce(o.deletion_scheduled_for <= now(), false) as deleted
+      from public.organisation_members m join public.organisations o on o.id = m.organisation_id
+      where m.user_id = ${userId}
     `
     if (!row) return { reason: 'no_organisation' }
-    if (row.status !== 'active' || !isRole(row.role)) return { reason: 'access_ended' }
-    return { memberId: row.id, organisationId: row.organisation_id, role: row.role }
+    // Past its deletion date the workspace is gone for everyone, even before the data is purged.
+    if (row.status !== 'active' || !isRole(row.role) || row.deleted) return { reason: 'access_ended' }
+    return { memberId: row.id, organisationId: row.organisation_id, role: row.role, readOnly: row.deleting }
   }
 }

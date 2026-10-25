@@ -17,6 +17,8 @@ export interface FileStorage {
   /** A download link valid for 5 minutes that saves the file under `fileName`. */
   downloadUrl(path: string, fileName: string): Promise<string>
   remove(paths: string[]): Promise<void>
+  /** The file's bytes, or null if it's gone. For data exports (F1.10). */
+  read(path: string): Promise<Uint8Array | null>
 }
 
 export function createSupabaseStorage(supabase: SupabaseClient): FileStorage {
@@ -45,6 +47,14 @@ export function createSupabaseStorage(supabase: SupabaseClient): FileStorage {
       if (!paths.length) return
       const { error } = await bucket().remove(paths)
       if (error) throw error
+    },
+    async read(path) {
+      const { data, error } = await bucket().download(path)
+      if (error) {
+        if ((error as { status?: number }).status === 404 || /not.?found/i.test(error.message)) return null
+        throw error
+      }
+      return new Uint8Array(await data.arrayBuffer())
     },
   }
 }

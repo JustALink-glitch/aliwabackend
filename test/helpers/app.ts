@@ -77,6 +77,10 @@ export function fakeStorage() {
         removed.push(p)
       }
     },
+    async read(path) {
+      const o = objects.get(path)
+      return o ? new Uint8Array(o.size).fill(120) : null
+    },
   }
   const put = (path: string, size = 1024, type: string | null = 'application/pdf') => objects.set(path, { size, type })
   return { storage, put, objects, removed }
