@@ -4,7 +4,7 @@ import type { AppDeps } from '../app.js'
 import { refreshFlags, ruleSettings } from '../lib/attention.js'
 import { completionRule } from '../lib/completion.js'
 import { audit } from '../lib/db.js'
-import { parseBody } from '../lib/validation.js'
+import { parseBody, uuid } from '../lib/validation.js'
 import { requireAuth, requireRole, type AuthVariables } from '../middleware/auth.js'
 import { signedBy } from './completion.js'
 
@@ -37,7 +37,27 @@ const Rules = z.object({
   trainersCanResolve: z.boolean(),
 })
 
-/** /v1/settings — F1.05 Completion & certificates, F1.06 Needs attention rules (owners and admins). */
+const ReportSettings = z.object({
+  dueHours: z.coerce.number({ error: 'Enter a number of hours.' }).int('Use whole hours.').min(1, 'Use 1 hour or more.').max(168, 'Use a week (168 hours) or less.'),
+  remind: z.boolean(),
+  overdueOnOverview: z.boolean(),
+  questions: z
+    .array(
+      z.object({
+        id: uuid.nullish(),
+        prompt: z.string().trim().min(1, 'Write the question.').max(200),
+        multiple: z.boolean(),
+        options: z
+          .array(z.string().trim().min(1, 'Options can’t be blank.').max(80))
+          .min(2, 'Give at least two options.')
+          .max(10, 'Keep it to 10 options.')
+          .refine((o) => new Set(o.map((x) => x.toLowerCase())).size === o.length, 'Each option must be different.'),
+      }),
+    )
+    .max(10, 'Keep it to 10 questions.'),
+})
+
+/** /v1/settings — F1.05 Completion & certificates, F1.06 Needs attention rules, F1.08 Session reports (owners and admins). */
 export function settingsRoutes(deps: AppDeps) {
   const now = () => (deps.now ? deps.now() : new Date())
 
@@ -80,9 +100,58 @@ export function settingsRoutes(deps: AppDeps) {
     return { ...rules, flaggedNow: flagged!.n }
   }
 
+  async function reportSettings(organisationId: string) {
+    const [[s], questions] = await Promise.all([
+      deps.sql<{ hours: number; remind: boolean; overview: boolean }[]>`
+        select report_due_hours as hours, report_reminder_enabled as remind, report_overdue_on_overview as overview
+        from public.organisation_settings where organisation_id = ${organisationId}
+      `,
+      deps.sql<{ id: string; prompt: string; options: string[]; multiple: boolean }[]>`
+        select id, prompt, options, multiple from public.report_questions where organisation_id = ${organisationId} and archived_at is null order by position, created_at
+      `,
+    ])
+    return { dueHours: s!.hours, remind: s!.remind, overdueOnOverview: s!.overview, questions }
+  }
+
   return (
     new Hono<{ Variables: AuthVariables }>()
       .use(requireAuth(deps), requireRole('owner', 'admin'))
+
+      .get('/session-reports', async (c) => c.json({ settings: await reportSettings(c.var.auth.organisationId) }))
+
+      // Questions keep their id when edited; removed ones are archived so old reports still read correctly.
+      .put('/session-reports', async (c) => {
+        const body = await parseBody(c, ReportSettings)
+        const auth = c.var.auth
+        await deps.sql.begin(async (tx) => {
+          await tx`
+            update public.organisation_settings set report_due_hours = ${body.dueHours}, report_reminder_enabled = ${body.remind},
+              report_overdue_on_overview = ${body.overdueOnOverview}, updated_at = now()
+            where organisation_id = ${auth.organisationId}
+          `
+          const keep = body.questions.flatMap((q) => (q.id ? [q.id] : []))
+          await tx`
+            update public.report_questions set archived_at = now()
+            where organisation_id = ${auth.organisationId} and archived_at is null and not (id = any(${keep}::uuid[]))
+          `
+          for (const [i, q] of body.questions.entries()) {
+            const [updated] = q.id
+              ? await tx<{ id: string }[]>`
+                  update public.report_questions set prompt = ${q.prompt}, options = ${q.options}, multiple = ${q.multiple}, position = ${i + 1}
+                  where id = ${q.id} and organisation_id = ${auth.organisationId} and archived_at is null returning id
+                `
+              : []
+            if (!updated) {
+              await tx`
+                insert into public.report_questions (organisation_id, prompt, options, multiple, position)
+                values (${auth.organisationId}, ${q.prompt}, ${q.options}, ${q.multiple}, ${i + 1})
+              `
+            }
+          }
+          await audit(tx, { organisationId: auth.organisationId, actorMemberId: auth.memberId, action: 'settings.session_reports_updated', entityType: 'organisation', entityId: auth.organisationId, requestId: c.var.requestId })
+        })
+        return c.json({ settings: await reportSettings(auth.organisationId) })
+      })
 
       .get('/completion', async (c) => c.json({ settings: await completionSettings(c.var.auth.organisationId) }))
 

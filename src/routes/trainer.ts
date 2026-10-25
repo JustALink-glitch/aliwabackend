@@ -267,5 +267,145 @@ export function trainerRoutes(deps: AppDeps) {
           })),
         })
       })
+
+      // T2.01 Today's teaching: my cohorts, today's sessions, grading queue and headline figures.
+      .get('/today', async (c) => {
+        const auth = c.var.auth
+        const assistant = auth.role === 'assistant_trainer'
+        await refreshFlags(deps.sql, auth.organisationId, now())
+        const [cohorts, sessions, queue, [att], [flagged], [settings], leads, [org], rules] = await Promise.all([
+          deps.sql<{ id: string; name: string; programme: string; status: string; participants: number; held: number; planned: number; present: number; recorded: number; next_at: Date | null; courses: string[] }[]>`
+            with mine as (
+              select x.id, x.cohort_id, x.planned_session_count from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id
+              where t.member_id = ${auth.memberId}
+            )
+            select h.id, h.name, p.name as programme, public.status(h) as status,
+                   (select count(*)::int from public.enrolments e where e.cohort_id = h.id and e.status = 'active') as participants,
+                   (select count(*)::int from public.sessions s where s.cohort_course_id in (select id from mine where cohort_id = h.id) and public.status(s) = 'held') as held,
+                   greatest((select coalesce(sum(planned_session_count), 0)::int from mine where cohort_id = h.id),
+                            (select count(*)::int from public.sessions s where s.cohort_course_id in (select id from mine where cohort_id = h.id) and s.cancelled_at is null)) as planned,
+                   (select count(*)::int from public.attendance_records a join public.sessions s on s.id = a.session_id
+                     where s.cohort_course_id in (select id from mine where cohort_id = h.id) and s.cancelled_at is null and a.status = 'present') as present,
+                   (select count(*)::int from public.attendance_records a join public.sessions s on s.id = a.session_id
+                     where s.cohort_course_id in (select id from mine where cohort_id = h.id) and s.cancelled_at is null) as recorded,
+                   (select min(s.starts_at) from public.sessions s where s.cohort_course_id in (select id from mine where cohort_id = h.id) and s.cancelled_at is null and s.ends_at > now()) as next_at,
+                   array(select co.name from mine m join public.cohort_courses x on x.id = m.id join public.courses co on co.id = x.course_id where m.cohort_id = h.id order by co.name) as courses
+            from public.cohorts h join public.programmes p on p.id = h.programme_id
+            where h.id in (select cohort_id from mine) and public.status(h) in ('active', 'upcoming')
+            order by h.starts_on
+          `,
+          // Today and the next one after, in the organisation's time zone.
+          deps.sql<{ id: string; course: string; cohort: string; starts_at: Date; ends_at: Date; mode: string; location: string | null; join_url: string | null; status: string; expected: number; recorded: number; number: number; total: number; today: boolean }[]>`
+            with tz as (select time_zone from public.organisations where id = ${auth.organisationId})
+            select s.id, co.name as course, h.name as cohort, s.starts_at, s.ends_at, s.mode, s.location, s.zoom_join_url as join_url, public.status(s) as status,
+                   (select count(*)::int from public.enrolments e where e.cohort_id = h.id and e.status = 'active') as expected,
+                   (select count(*)::int from public.attendance_records a where a.session_id = s.id) as recorded,
+                   (select count(*)::int from public.sessions y where y.cohort_course_id = s.cohort_course_id and y.cancelled_at is null and y.starts_at <= s.starts_at) as number,
+                   greatest(coalesce(x.planned_session_count, 0), (select count(*)::int from public.sessions y where y.cohort_course_id = s.cohort_course_id and y.cancelled_at is null)) as total,
+                   ((s.starts_at at time zone (select time_zone from tz))::date = (now() at time zone (select time_zone from tz))::date) as today
+            from public.sessions s
+            join public.cohort_courses x on x.id = s.cohort_course_id
+            join public.courses co on co.id = x.course_id
+            join public.cohorts h on h.id = x.cohort_id
+            where s.cohort_course_id in (select cohort_course_id from public.cohort_course_trainers where member_id = ${auth.memberId})
+              and s.cancelled_at is null
+              and (s.starts_at at time zone (select time_zone from tz))::date >= (now() at time zone (select time_zone from tz))::date
+            order by s.starts_at
+            limit 8
+          `,
+          deps.sql<{ id: string; title: string; cohort: string; due_at: Date; closed: boolean; expected: number; submitted: number; late: number; to_grade: number }[]>`
+            select a.id, a.title, h.name as cohort, a.due_at, (a.late_policy = 'closed' and a.due_at < now()) as closed,
+                   (select count(*)::int from public.enrolments e where e.cohort_id = h.id and e.status = 'active') as expected,
+                   (select count(*)::int from public.submissions s where s.assignment_id = a.id) as submitted,
+                   (select count(*)::int from public.submissions s where s.assignment_id = a.id and s.is_late) as late,
+                   (select count(*)::int from public.submissions s left join public.grades g on g.submission_id = s.id where s.assignment_id = a.id and g.id is null) as to_grade
+            from public.assignments a
+            join public.cohort_courses x on x.id = a.cohort_course_id
+            join public.cohorts h on h.id = x.cohort_id
+            where a.cohort_course_id in (select cohort_course_id from public.cohort_course_trainers where member_id = ${auth.memberId})
+              and a.published_at is not null and h.archived_at is null
+            order by a.due_at
+          `,
+          // Attendance in my courses: the last 4 weeks and the 4 before.
+          deps.sql<{ present: number; recorded: number; prev_present: number; prev_recorded: number }[]>`
+            select count(*) filter (where a.status = 'present' and s.starts_at > now() - interval '28 days')::int as present,
+                   count(*) filter (where s.starts_at > now() - interval '28 days')::int as recorded,
+                   count(*) filter (where a.status = 'present' and s.starts_at <= now() - interval '28 days' and s.starts_at > now() - interval '56 days')::int as prev_present,
+                   count(*) filter (where s.starts_at <= now() - interval '28 days' and s.starts_at > now() - interval '56 days')::int as prev_recorded
+            from public.attendance_records a join public.sessions s on s.id = a.session_id
+            where s.cancelled_at is null and s.cohort_course_id in (select cohort_course_id from public.cohort_course_trainers where member_id = ${auth.memberId})
+          `,
+          deps.sql<{ n: number }[]>`
+            select count(distinct f.enrolment_id)::int as n from public.attention_flags f join public.enrolments e on e.id = f.enrolment_id
+            where f.organisation_id = ${auth.organisationId} and f.cleared_at is null and f.resolved_at is null
+              and e.cohort_id in (select x.cohort_id from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id where t.member_id = ${auth.memberId})
+          `,
+          deps.sql<{ attendance: boolean; resources: boolean; grade: boolean; create: boolean; reports: boolean }[]>`
+            select assistant_can_take_attendance as attendance, assistant_can_add_resources as resources, assistant_can_grade as grade,
+                   assistant_can_create_assignments as create, assistant_can_write_reports as reports
+            from public.organisation_settings where organisation_id = ${auth.organisationId}
+          `,
+          // For assistants: who leads the courses they assist on.
+          deps.sql<{ course: string; cohort: string; lead: string | null }[]>`
+            select co.name as course, h.name as cohort,
+                   (select m.first_name || ' ' || m.last_name from public.cohort_course_trainers l join public.organisation_members m on m.id = l.member_id
+                     where l.cohort_course_id = x.id and l.is_lead limit 1) as lead
+            from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id
+            join public.courses co on co.id = x.course_id join public.cohorts h on h.id = x.cohort_id
+            where t.member_id = ${auth.memberId} and public.status(h) in ('active', 'upcoming') order by h.starts_on, co.name
+          `,
+          deps.sql<{ time_zone: string }[]>`select time_zone from public.organisations where id = ${auth.organisationId}`,
+          ruleSettings(deps.sql, auth.organisationId),
+        ])
+        const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null)
+        const canGrade = !assistant || Boolean(settings?.grade)
+        const open = queue.filter((q) => q.to_grade > 0 || q.due_at.getTime() > now().getTime())
+        return c.json({
+          timeZone: org!.time_zone,
+          role: assistant ? 'assistant' : 'lead',
+          can: assistant
+            ? { attendance: settings!.attendance, resources: settings!.resources, grade: settings!.grade, createAssignments: settings!.create, reports: settings!.reports }
+            : { attendance: true, resources: true, grade: true, createAssignments: true, reports: true },
+          assists: assistant ? leads.map((l) => ({ course: l.course, cohort: l.cohort, lead: l.lead })) : [],
+          cohorts: cohorts.map((h) => ({
+            id: h.id,
+            name: h.name,
+            programme: h.programme,
+            status: h.status,
+            participants: h.participants,
+            held: h.held,
+            planned: h.planned,
+            attendance: pct(h.present, h.recorded),
+            nextSessionAt: h.next_at,
+            courses: h.courses,
+          })),
+          attendance: { rate: pct(att!.present, att!.recorded), previous: pct(att!.prev_present, att!.prev_recorded) },
+          toGrade: canGrade ? { submissions: queue.reduce((n, q) => n + q.to_grade, 0), assignments: queue.filter((q) => q.to_grade > 0).length } : null,
+          flagged: rules.trainersSee ? flagged!.n : null,
+          today: sessions.filter((s) => s.today).map(toToday),
+          next: sessions.find((s) => !s.today) ? toToday(sessions.find((s) => !s.today)!) : null,
+          grading: canGrade
+            ? open.slice(0, 5).map((q) => ({ id: q.id, title: q.title, cohort: q.cohort, dueAt: q.due_at, closed: q.closed, expected: q.expected, submitted: q.submitted, late: q.late, toGrade: q.to_grade }))
+            : [],
+        })
+
+        function toToday(s: (typeof sessions)[number]) {
+          return {
+            id: s.id,
+            course: s.course,
+            cohort: s.cohort,
+            startsAt: s.starts_at,
+            endsAt: s.ends_at,
+            mode: s.mode,
+            location: s.location,
+            joinUrl: s.join_url,
+            status: s.status,
+            expected: s.expected,
+            recorded: s.recorded,
+            number: s.number,
+            total: s.total,
+          }
+        }
+      })
   )
 }

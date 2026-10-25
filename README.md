@@ -60,6 +60,12 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/sessions/:id/resources/uploads` | Staff (assistants if F1.04 allows) | T8.01 — signed upload URL for a resource file |
 | `POST` | `/v1/sessions/:id/resources` | Staff (assistants if F1.04 allows) | T8.01 — add a file or link to the session or the whole course; visible to participants or not |
 | `GET` | `/v1/sessions/:id/resources/:resourceId` | Staff (own courses) | Download link for a resource |
+| `GET` | `/v1/trainer/today` | Trainer, assistant | T2.01 — my cohorts, today's sessions, grading queue, attendance and flag counts |
+| `GET` | `/v1/session-reports` | Staff (trainers: courses they report on) | T5.03 / C3.01 — held sessions with report state (due, overdue, submitted) and counts |
+| `GET` | `/v1/session-reports/:sessionId` | Staff (own courses) | T5.01 / T5.02 / C3.02 — questions, answers, summary, whether it can still be edited |
+| `PUT` | `/v1/session-reports/:sessionId` | Lead trainer (assistants if F1.04 allows) | T5.01 — save a draft or submit; editable until due, a late report is final |
+| `POST` | `/v1/session-reports/:sessionId/remind` | Owner, admin | C3.01 — email the trainer about a due or overdue report |
+| `GET` `PUT` | `/v1/settings/session-reports` | Owner, admin | F1.08 — due hours, reminder, overview, multiple-choice questions |
 | `GET` | `/v1/trainer/cohorts` | Trainer, assistant | T3.04 — cohorts I teach in, one row per course |
 | `GET` | `/v1/trainer/cohorts/:id` | Trainer, assistant | T3.05 — cohort summary, courses (mine marked), flagged count |
 | `GET` | `/v1/assignments` | Staff | T6.01 / C4.01 — trainers: their courses, drafts included; admins: every published assignment |
