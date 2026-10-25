@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
+import { notify } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import type { AuthContext } from '../lib/auth.js'
@@ -122,6 +123,22 @@ export function sessionResourceRoutes(deps: AppDeps) {
             returning id
           `
           await audit(tx, { organisationId: auth.organisationId, actorMemberId: auth.memberId, action: 'resource.added', entityType: 'session', entityId: session.id, data: { kind: body.kind, scope: body.scope }, requestId: c.var.requestId })
+          if (body.visible) {
+            const [where] = await tx<{ course: string; people: string[] }[]>`
+              select co.name as course, coalesce(array_agg(e.member_id) filter (where e.member_id is not null), '{}') as people
+              from public.cohort_courses x join public.courses co on co.id = x.course_id
+              left join public.enrolments e on e.cohort_id = x.cohort_id and e.status = 'active'
+              where x.id = ${session.cohort_course_id} group by co.name
+            `
+            await notify(tx, {
+              organisationId: auth.organisationId,
+              to: { memberIds: where!.people },
+              event: 'new_resource',
+              title: `New resource: ${body.name}`,
+              body: where!.course,
+              link: body.scope === 'session' ? `/participant/sessions/${session.id}` : `/participant/courses/${session.cohort_course_id}`,
+            })
+          }
           return row!.id
         })
         return c.json({ resource: { id } }, 201)

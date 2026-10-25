@@ -1,4 +1,7 @@
 import { Hono } from 'hono'
+import { notify } from '../lib/notifications.js'
+
+const roleNames: Record<string, string> = { admin: 'Admin', trainer: 'Trainer', assistant_trainer: 'Assistant trainer' }
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
@@ -185,6 +188,17 @@ export function invitationRoutes(deps: AppDeps) {
             entityId: row.member_id,
             requestId: c.var.requestId,
           })
+          // Staff joining is news for the programme team (F1.09); participants arrive in bulk, so they don't notify.
+          if (row.role !== 'participant')
+            await notify(tx, {
+              organisationId: row.organisation_id,
+              to: { roles: ['owner', 'admin'] },
+              except: row.member_id,
+              event: 'invitation_accepted',
+              title: 'Invitation accepted',
+              body: `${firstName} ${lastName} · ${roleNames[row.role] ?? row.role}`,
+              link: row.role === 'admin' ? '/admin/settings/members' : `/admin/trainers/${row.member_id}`,
+            })
         })
       } catch (error) {
         if (createdUserId) {

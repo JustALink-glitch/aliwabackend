@@ -27,6 +27,8 @@ import { myRoutes } from './routes/my.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { completionRoutes } from './routes/completion.js'
 import { privacyRoutes } from './routes/privacy.js'
+import { notificationRoutes } from './routes/notifications.js'
+import { searchRoutes } from './routes/search.js'
 import { exportRoutes } from './routes/exports.js'
 import { overviewRoutes } from './routes/overview.js'
 import { reportRoutes } from './routes/reports.js'
@@ -94,6 +96,8 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/overview', overviewRoutes(deps))
   app.route('/v1/reports', exportRoutes(deps))
   app.route('/v1/privacy', privacyRoutes(deps))
+  app.route('/v1/notifications', notificationRoutes(deps))
+  app.route('/v1/search', searchRoutes(deps))
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404))
 

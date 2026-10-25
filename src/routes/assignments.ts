@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
+import { notify } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
@@ -761,6 +762,14 @@ export function assignmentRoutes(deps: AppDeps) {
             entityId: submission.id,
             data: { assignmentId: a.id, memberId, scorePct: v.scorePct },
             requestId: c.var.requestId,
+          })
+          await notify(tx, {
+            organisationId: auth.organisationId,
+            to: { memberIds: [memberId] },
+            event: 'grade_saved',
+            title: grade!.created ? `New grade: ${a.title}` : `Grade updated: ${a.title}`,
+            body: body.feedback ? 'Your trainer left feedback.' : null,
+            link: `/participant/grades/${a.id}`,
           })
         })
         return c.json({ ok: true })

@@ -28,7 +28,7 @@ export function requireIdentity(deps: { verifyToken: VerifyToken }) {
 }
 
 /** Writes still allowed while an organisation is scheduled for deletion. */
-const READ_ONLY_ALLOWED = ['/v1/privacy', '/v1/reports']
+const READ_ONLY_ALLOWED = ['/v1/privacy', '/v1/reports', '/v1/notifications']
 
 /**
  * Requires a valid token and an active organisation membership.

@@ -2,37 +2,9 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit } from '../lib/db.js'
-import type { Role } from '../lib/roles.js'
+import { EVENTS } from '../lib/notifications.js'
 import { fullName, parseBody } from '../lib/validation.js'
 import { requireAuth, type AuthVariables } from '../middleware/auth.js'
-
-/** Notification events people can tune, by role, with their defaults (P8.01 / P8.02). */
-type Event = { key: string; label: string; when: string; email: boolean; inApp: boolean }
-
-/** F1.09 Owners and admins. */
-const ADMIN_EVENTS: Event[] = [
-  { key: 'attention_flags', label: 'New Needs attention flags', when: 'Daily digest', email: true, inApp: true },
-  { key: 'report_overdue', label: 'Session report overdue', when: '', email: false, inApp: true },
-  { key: 'attendance_missing', label: 'Attendance not recorded', when: '2 hours after a session ends', email: false, inApp: true },
-  { key: 'zoom_review', label: 'Zoom attendees to review', when: 'Names Synqop couldn’t match', email: false, inApp: true },
-  { key: 'participant_left', label: 'Participant deferred or withdrawn', when: '', email: true, inApp: true },
-  { key: 'certificate_eligible', label: 'Participants eligible for a certificate', when: '', email: true, inApp: true },
-  { key: 'import_finished', label: 'Import finished', when: '', email: false, inApp: true },
-  { key: 'report_ready', label: 'Report ready to download', when: '', email: false, inApp: true },
-  { key: 'invitation_accepted', label: 'Invitation accepted', when: 'Trainers and members', email: false, inApp: true },
-]
-
-const EVENTS: Partial<Record<Role, Event[]>> = {
-  owner: ADMIN_EVENTS,
-  admin: ADMIN_EVENTS,
-  participant: [
-    { key: 'session_starting', label: 'Session starting soon', when: '1 hour before', email: true, inApp: true },
-    { key: 'assignment_due', label: 'Assignment due', when: '24 hours before', email: true, inApp: true },
-    { key: 'grade_saved', label: 'New grade or feedback', when: 'When a trainer saves it', email: true, inApp: true },
-    { key: 'session_changed', label: 'Session changed or cancelled', when: 'Straight away', email: true, inApp: true },
-    { key: 'new_resource', label: 'New recording or resource', when: 'Daily digest', email: false, inApp: true },
-  ],
-}
 
 const Profile = z.object({
   fullName,

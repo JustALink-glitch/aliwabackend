@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { notify } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, isPg, PG, type Sql, type Tx } from '../lib/db.js'
@@ -507,6 +508,16 @@ export function participantRoutes(deps: AppDeps) {
             },
             requestId: c.var.requestId,
           })
+          const added = reviewed.filter((r) => r.status === 'ready').length
+          const skipped = reviewed.length - added
+          await notify(tx, {
+            organisationId,
+            to: { roles: ['owner', 'admin'] },
+            event: 'import_finished',
+            title: `${added} ${added === 1 ? 'participant' : 'participants'} imported`,
+            body: `${cohort.name}${skipped ? ` · ${skipped} ${skipped === 1 ? 'row' : 'rows'} skipped` : ''}`,
+            link: `/admin/cohorts/${cohort.id}/participants`,
+          })
           return { reviewed, invitations }
         })
 
@@ -711,6 +722,15 @@ export function participantRoutes(deps: AppDeps) {
             data: { from: enrolment.cohort_name, to: target?.name ?? null, reason: body.reason },
             requestId: c.var.requestId,
           })
+          await notify(tx, {
+            organisationId,
+            to: { roles: ['owner', 'admin'] },
+            except: actorId,
+            event: 'participant_left',
+            title: `${participant.first_name} ${participant.last_name} deferred`,
+            body: target ? `${enrolment.cohort_name} → ${target.name}` : enrolment.cohort_name,
+            link: `/admin/participants/${participant.id}`,
+          })
           return { from: enrolment.cohort_name, to: target?.name ?? null }
         })
         if (body.notify) {
@@ -748,6 +768,15 @@ export function participantRoutes(deps: AppDeps) {
             entityId: participant.id,
             data: { cohort: enrolment.cohort_name, reason: body.reason },
             requestId: c.var.requestId,
+          })
+          await notify(tx, {
+            organisationId,
+            to: { roles: ['owner', 'admin'] },
+            except: actorId,
+            event: 'participant_left',
+            title: `${participant.first_name} ${participant.last_name} withdrawn`,
+            body: enrolment.cohort_name,
+            link: `/admin/participants/${participant.id}`,
           })
           return enrolment.cohort_name
         })

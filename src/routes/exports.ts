@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { notify } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit } from '../lib/db.js'
@@ -43,8 +44,8 @@ export function exportRoutes(deps: AppDeps) {
   async function generate(id: string, organisationId: string) {
     try {
       await deps.sql`update public.generated_reports set status = 'running' where id = ${id}`
-      const [job] = await deps.sql<{ parameters: ReportParams; format: 'pdf' | 'csv'; title: string }[]>`
-        select parameters, format, title from public.generated_reports where id = ${id}
+      const [job] = await deps.sql<{ parameters: ReportParams; format: 'pdf' | 'csv'; title: string; requested_by: string | null }[]>`
+        select parameters, format, title, requested_by from public.generated_reports where id = ${id}
       `
       const doc = await buildReport(deps.sql, organisationId, job!.parameters)
       const [org] = await deps.sql<{ time_zone: string }[]>`select time_zone from public.organisations where id = ${organisationId}`
@@ -54,6 +55,15 @@ export function exportRoutes(deps: AppDeps) {
       await deps.sql`
         update public.generated_reports set status = 'ready', content = ${content}, file_name = ${fileName}, completed_at = now(), error = null where id = ${id}
       `
+      if (job!.requested_by)
+        await notify(deps.sql, {
+          organisationId,
+          to: { memberIds: [job!.requested_by] },
+          event: 'report_ready',
+          title: 'Report ready to download',
+          body: job!.title,
+          link: '/admin/reports',
+        })
     } catch (error) {
       console.error('Report failed', error)
       await deps.sql`update public.generated_reports set status = 'failed', error = ${(error as Error).message.slice(0, 500)}, completed_at = now() where id = ${id}`.catch(() => undefined)

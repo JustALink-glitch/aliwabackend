@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { notify as inApp } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
@@ -216,8 +217,19 @@ export function sessionRoutes(deps: AppDeps) {
   }
 
   async function notify(
-    input: { organisationId: string; organisationName: string; cohortId: string; trainerId: string | null; subject: string; intro: (firstName: string) => string },
+    input: { organisationId: string; organisationName: string; cohortId: string; trainerId: string | null; subject: string; intro: (firstName: string) => string; sessionId: string },
   ) {
+    // In the participants' bell too (G1.01), unless they switched it off.
+    const enrolled = await deps.sql<{ id: string }[]>`
+      select e.member_id as id from public.enrolments e where e.cohort_id = ${input.cohortId} and e.status = 'active'
+    `
+    await inApp(deps.sql, {
+      organisationId: input.organisationId,
+      to: { memberIds: enrolled.map((r) => r.id) },
+      event: 'session_changed',
+      title: input.subject,
+      link: `/participant/sessions/${input.sessionId}`,
+    })
     const people = await deps.sql<{ email: string; first_name: string }[]>`
       select m.email, m.first_name from public.organisation_members m
       join public.enrolments e on e.member_id = m.id and e.cohort_id = ${input.cohortId} and e.status = 'active'
@@ -467,6 +479,7 @@ export function sessionRoutes(deps: AppDeps) {
             organisationName,
             cohortId: session.cohort_id,
             trainerId: body.trainerMemberId ?? session.trainer_member_id,
+            sessionId: session.id,
             subject: `${session.course_name}: session changed`,
             intro: () =>
               updated > 1
@@ -507,6 +520,7 @@ export function sessionRoutes(deps: AppDeps) {
             organisationName,
             cohortId: session.cohort_id,
             trainerId: session.trainer_member_id,
+            sessionId: session.id,
             subject: `Cancelled: ${session.course_name}, ${describeWhen(session, tz)}`,
             intro: () => `the ${session.course_name} session on ${describeWhen(session, tz)} is cancelled. Reason: ${body.reason}`,
           })

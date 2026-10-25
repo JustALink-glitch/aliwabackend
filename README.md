@@ -19,6 +19,9 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 |---|---|---|---|
 | `POST` | `/v1/organisations` | Signed in, no organisation yet | R1 — creates the organisation; caller becomes owner |
 | `GET` | `/v1/me` | Any member | User, membership (with display name and last sign-in), organisation |
+| `GET` | `/v1/notifications?limit=` | Any member | G1.01 — your in-app notifications, newest first, with the unread count |
+| `POST` | `/v1/notifications/:id/read` · `/v1/notifications/read-all` | Any member | G1.01 — mark one or all as read |
+| `GET` | `/v1/search?q=` | Any member | G1.02 — grouped results scoped to the role: admins see everything, trainers what they teach, participants their courses and sessions |
 | `PATCH` | `/v1/me` | Any member | P8.01 / G1.04 — full name, display name, phone |
 | `GET` `PUT` | `/v1/me/notification-preferences` | Any member | P8.02 / F1.09 — email and in-app per event; admins also set a digest time |
 | `GET` | `/v1/members?role=&status=` | Owner, admin | B1 / B2 lists (`role` takes a comma list) |
