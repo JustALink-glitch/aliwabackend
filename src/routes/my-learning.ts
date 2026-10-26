@@ -310,8 +310,8 @@ export function myLearningRoutes(deps: AppDeps) {
         const auth = c.var.auth
         const id = c.req.param('id')
         if (!uuid.safeParse(id).success) throw notFound('Course not found.')
-        const [course] = await deps.sql<{ id: string; name: string; cohort_id: string; cohort_name: string; lead_first: string | null; lead_last: string | null; lead_id: string | null }[]>`
-          select x.id, co.name, h.id as cohort_id, h.name as cohort_name, m.first_name as lead_first, m.last_name as lead_last, m.id as lead_id
+        const [course] = await deps.sql<{ id: string; name: string; cohort_id: string; cohort_name: string; lead_first: string | null; lead_last: string | null; lead_id: string | null; lead_bio: string | null }[]>`
+          select x.id, co.name, h.id as cohort_id, h.name as cohort_name, m.first_name as lead_first, m.last_name as lead_last, m.id as lead_id, m.bio as lead_bio
           from public.enrolments e
           join public.cohort_courses x on x.cohort_id = e.cohort_id
           join public.courses co on co.id = x.course_id
@@ -329,7 +329,7 @@ export function myLearningRoutes(deps: AppDeps) {
             id: course.id,
             name: course.name,
             cohort: { id: course.cohort_id, name: course.cohort_name },
-            trainer: course.lead_id ? { id: course.lead_id, name: name(course.lead_first, course.lead_last) } : null,
+            trainer: course.lead_id ? { id: course.lead_id, name: name(course.lead_first, course.lead_last), bio: course.lead_bio } : null,
           },
           attendance: attendanceOf(rows),
           sessions: rows.map((r) => toSession(r, t)),
