@@ -128,7 +128,7 @@ async function adminSearch(sql: Sql, auth: AuthContext, pattern: string, day: Da
       })),
     },
     { kind: 'cohorts', label: 'Cohorts', items: cohorts.map((h) => ({ id: h.id, title: h.name, subtitle: h.programme, link: `/admin/cohorts/${h.id}` })) },
-    { kind: 'courses', label: 'Courses', items: courses.map((co) => ({ id: co.id, title: co.name, subtitle: co.programme, link: `/admin/programmes/${co.programme_id}` })) },
+    { kind: 'courses', label: 'Courses', items: courses.map((co) => ({ id: co.id, title: co.name, subtitle: co.programme, link: `/admin/courses/library/${co.id}` })) },
     {
       kind: 'programmes',
       label: 'Programmes',

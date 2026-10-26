@@ -156,7 +156,7 @@ describe.skipIf(!TEST_DATABASE_URL)('notifications and search (G1.01, G1.02)', (
     ])
     const python = (await get('/v1/search?q=python')).body.groups as Group[]
     expect(python.map((g) => g.kind)).toEqual(['courses', 'sessions'])
-    expect(python[0]!.items[0]).toMatchObject({ title: 'Python for Data Analysis', subtitle: 'Data & AI', link: `/admin/programmes/${ids.programme!}` })
+    expect(python[0]!.items[0]).toMatchObject({ title: 'Python for Data Analysis', subtitle: 'Data & AI', link: expect.stringMatching(/^\/admin\/courses\/library\//) })
     expect(((await get('/v1/search?q=ngozi')).body.groups as Group[])[0]).toMatchObject({ kind: 'trainers', items: [{ title: 'Ngozi Eze', subtitle: 'Trainer' }] })
     expect((await get('/v1/search?q=a')).body.groups).toEqual([])
     expect((await get('/v1/search?q=%25%25')).body.groups).toEqual([])

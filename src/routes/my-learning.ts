@@ -137,7 +137,9 @@ export function myLearningRoutes(deps: AppDeps) {
   async function resourcesOf(cohortCourseId: string, sessionId?: string) {
     return deps.sql<{ id: string; kind: 'file' | 'link'; name: string; url: string | null; size_bytes: string | null; session_id: string | null }[]>`
       select id, kind, name, url, size_bytes, session_id from public.resources
-      where cohort_course_id = ${cohortCourseId} and visible_to_participants ${sessionId ? deps.sql`and (session_id = ${sessionId} or session_id is null)` : deps.sql``}
+      where visible_to_participants
+        and ((cohort_course_id = ${cohortCourseId} ${sessionId ? deps.sql`and (session_id = ${sessionId} or session_id is null)` : deps.sql``})
+             or course_id = (select x.course_id from public.cohort_courses x where x.id = ${cohortCourseId}))
       order by created_at desc
     `
   }
@@ -338,8 +340,8 @@ export function myLearningRoutes(deps: AppDeps) {
         const id = c.req.param('id')
         if (!uuid.safeParse(id).success) throw notFound('Resource not found.')
         const [file] = await deps.sql<{ name: string; storage_path: string | null; url: string | null }[]>`
-          select r.name, r.storage_path, r.url from public.resources r
-          join public.cohort_courses x on x.id = r.cohort_course_id
+          select distinct r.name, r.storage_path, r.url from public.resources r
+          join public.cohort_courses x on x.id = r.cohort_course_id or x.course_id = r.course_id
           join public.enrolments e on e.cohort_id = x.cohort_id and e.member_id = ${auth.memberId} and e.status in ('active', 'completed')
           where r.id = ${id} and r.organisation_id = ${auth.organisationId} and r.visible_to_participants
         `

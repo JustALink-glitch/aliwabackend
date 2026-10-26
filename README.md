@@ -127,6 +127,9 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `GET` | `/v1/zoom/callback` | Public (Zoom redirect) | F1.07 — swaps the code for tokens (stored encrypted), back to Settings with `?zoom=connected` |
 | `DELETE` | `/v1/zoom/connection` | Owner, admin | F1.07 — disconnect; existing meetings stay in Zoom |
 | `GET` `POST` | `/v1/sessions/:id/attendance/zoom` | Staff on the session | C2.04 / T4.04 — Zoom names that didn't match by email, with suggestions; save matches and ignores |
+| `GET` `PATCH` | `/v1/courses/:id` | Owner, admin | A2.02 / A2.05 — course detail (cohorts, resources, assignments, sessions); edit |
+| `POST` | `/v1/courses/:id/archive` · `/restore` | Owner, admin | A2.06 — leaves the library; cohorts that run it keep it. `GET /v1/courses?archived=1` lists archived |
+| `POST` `GET` `DELETE` | `/v1/courses/:id/resources` · `/uploads` · `/:resourceId` | Owner, admin | A2.04 — course-wide resources (every cohort) or on one session |
 | `GET` `PUT` | `/v1/settings/completion` | Owner, admin | F1.05 — completion criteria, issuing, signatory, certificate title, default outcomes |
 | `GET` `PUT` | `/v1/settings/attention-rules` | Owner, admin | F1.06 — signals, who sees flags, how they close; with how many are flagged now |
 | `GET` | `/v1/my/progress` | Participant | P7.01 — progress against the completion rule |

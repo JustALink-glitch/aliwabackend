@@ -58,7 +58,9 @@ export function sessionResources(sql: Sql, sessionId: string, cohortCourseId: st
     select r.id, r.kind, r.name, r.url, r.size_bytes, r.mime_type, r.session_id, r.visible_to_participants, r.added_by,
            m.first_name as by_first, m.last_name as by_last, r.created_at
     from public.resources r left join public.organisation_members m on m.id = r.added_by
-    where r.cohort_course_id = ${cohortCourseId} and (r.session_id = ${sessionId} or r.session_id is null)
+    where (r.cohort_course_id = ${cohortCourseId} and (r.session_id = ${sessionId} or r.session_id is null))
+       -- A2.04 resources added to the whole course reach every cohort that runs it.
+       or r.course_id = (select x.course_id from public.cohort_courses x where x.id = ${cohortCourseId})
     order by r.created_at desc
   `
 }
@@ -149,7 +151,8 @@ export function sessionResourceRoutes(deps: AppDeps) {
         const resourceId = c.req.param('resourceId')
         if (!uuid.safeParse(resourceId).success) throw notFound('Resource not found.')
         const [r] = await deps.sql<{ name: string; storage_path: string | null; url: string | null }[]>`
-          select name, storage_path, url from public.resources where id = ${resourceId} and cohort_course_id = ${session.cohort_course_id}
+          select name, storage_path, url from public.resources
+          where id = ${resourceId} and (cohort_course_id = ${session.cohort_course_id} or course_id = (select x.course_id from public.cohort_courses x where x.id = ${session.cohort_course_id}))
         `
         if (!r) throw notFound('Resource not found.')
         return c.json({ url: r.storage_path ? await deps.storage.downloadUrl(r.storage_path, r.name) : r.url })
