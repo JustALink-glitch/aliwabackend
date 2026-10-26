@@ -27,7 +27,7 @@ export interface SchedulerDeps {
 const LOOKBACK_HOURS = 72
 const LOOKBACK_DAYS = 14
 
-export type JobCounts = Record<'zoom' | 'sessionReminders' | 'assignmentReminders' | 'reportReminders' | 'reportsOverdue' | 'attendanceMissing' | 'digests' | 'deleted', number>
+export type JobCounts = Record<'zoom' | 'sessionReminders' | 'assignmentReminders' | 'reportReminders' | 'reportsOverdue' | 'attendanceMissing' | 'digests' | 'trainerDigests' | 'deleted', number>
 
 interface Org {
   id: string
@@ -57,7 +57,7 @@ async function claim(sql: Sql, organisationId: string, key: string) {
 }
 
 export async function runScheduledJobs(deps: SchedulerDeps, now = new Date()): Promise<JobCounts> {
-  const counts: JobCounts = { zoom: 0, sessionReminders: 0, assignmentReminders: 0, reportReminders: 0, reportsOverdue: 0, attendanceMissing: 0, digests: 0, deleted: 0 }
+  const counts: JobCounts = { zoom: 0, sessionReminders: 0, assignmentReminders: 0, reportReminders: 0, reportsOverdue: 0, attendanceMissing: 0, digests: 0, trainerDigests: 0, deleted: 0 }
   counts.deleted = await purgeDeletedOrganisations(deps, now)
 
   // Workspaces scheduled for deletion are read-only: nothing to remind anyone about.
@@ -83,6 +83,7 @@ export async function runScheduledJobs(deps: SchedulerDeps, now = new Date()): P
       counts.reportsOverdue += reports.overdue
       counts.attendanceMissing += await attendanceMissing(deps, org, now)
       counts.digests += await digests(deps, org, now)
+      counts.trainerDigests += await trainerDigests(deps, org, now)
     } catch (error) {
       // One organisation's problem shouldn't stop everyone else's reminders.
       console.error(`Scheduled jobs failed for ${org.id}`, error)
@@ -318,19 +319,25 @@ const flagText: Record<string, (d: Record<string, unknown>) => string> = {
   low_grade: (d) => `average grade ${d.averagePct}%`,
 }
 
+/** Today's date and the time of day in the organisation's time zone. */
+function localClock(timeZone: string, now: Date) {
+  const local = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now)
+  const get = (t: string) => local.find((p) => p.type === t)?.value ?? '00'
+  return { today: `${get('year')}-${get('month')}-${get('day')}`, clock: `${get('hour') === '24' ? '00' : get('hour')}:${get('minute')}` }
+}
+
+const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
+/** Within three hours of the digest time, so a late start doesn't send this morning's digest at night. */
+const inDigestWindow = (clock: string, time: string) => minutes(clock) >= minutes(time) && minutes(clock) - minutes(time) < 180
+
 /** X2.06 Daily digest at each admin's digest time (org time zone): new flags and overdue reports. */
 async function digests(deps: SchedulerDeps, org: Org, now: Date) {
-  const local = new Intl.DateTimeFormat('en-CA', { timeZone: org.time_zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now)
-  const get = (t: string) => local.find((p) => p.type === t)?.value ?? '00'
-  const today = `${get('year')}-${get('month')}-${get('day')}`
-  const clock = `${get('hour') === '24' ? '00' : get('hour')}:${get('minute')}`
+  const { today, clock } = localClock(org.time_zone, now)
   const admins = await deps.sql<{ id: string; time: string }[]>`
     select m.id, coalesce(to_char(m.digest_time, 'HH24:MI'), ${org.digest}) as time from public.organisation_members m
     where m.organisation_id = ${org.id} and m.role in ('owner', 'admin') and m.status = 'active'
   `
-  const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
-  // Within three hours of their digest time, so a late start doesn't send this morning's digest at night.
-  const due = admins.filter((a) => minutes(clock) >= minutes(a.time) && minutes(clock) - minutes(a.time) < 180)
+  const due = admins.filter((a) => inDigestWindow(clock, a.time))
   if (!due.length) return 0
   let refreshed = false
   let n = 0
@@ -391,6 +398,99 @@ async function digests(deps: SchedulerDeps, org: Org, now: Date) {
   return n
 }
 
+/**
+ * T9.02 Trainers' morning: submissions waiting for their grade, and participants newly flagged in the
+ * cohorts they teach. Sent at the organisation's digest time; nothing new, nothing sent.
+ */
+async function trainerDigests(deps: SchedulerDeps, org: Org, now: Date) {
+  const { today, clock } = localClock(org.time_zone, now)
+  if (!inDigestWindow(clock, org.digest)) return 0
+  let refreshed = false
+  const refresh = async () => {
+    if (!refreshed) await refreshFlags(deps.sql, org.id, now)
+    refreshed = true
+  }
+  const trainers = await deps.sql<{ id: string; role: string; can_grade: boolean }[]>`
+    select m.id, m.role::text, (m.role = 'trainer' or s.assistant_can_grade) as can_grade
+    from public.organisation_members m join public.organisation_settings s on s.organisation_id = m.organisation_id
+    where m.organisation_id = ${org.id} and m.role in ('trainer', 'assistant_trainer') and m.status = 'active'
+      and exists (select 1 from public.cohort_course_trainers t where t.member_id = m.id)
+  `
+  const since = new Date(now.getTime() - 86_400_000)
+  let n = 0
+  for (const t of trainers) {
+    if (!(await claim(deps.sql, org.id, `trainer_digest:${t.id}:${today}`))) continue
+    await refresh()
+    const [queue, flags] = await Promise.all([
+      t.can_grade
+        ? deps.sql<{ title: string; cohort: string; to_grade: number }[]>`
+            select a.title, h.name as cohort,
+                   (select count(*)::int from public.submissions s left join public.grades g on g.submission_id = s.id where s.assignment_id = a.id and g.id is null) as to_grade
+            from public.assignments a join public.cohort_courses x on x.id = a.cohort_course_id join public.cohorts h on h.id = x.cohort_id
+            where a.cohort_course_id in (select cohort_course_id from public.cohort_course_trainers where member_id = ${t.id})
+              and a.published_at is not null and h.archived_at is null
+            order by a.due_at
+          `
+        : Promise.resolve([]),
+      deps.sql<{ first_name: string; last_name: string; cohort: string; rule: string; details: Record<string, unknown> | null }[]>`
+        select m.first_name, m.last_name, h.name as cohort, f.rule::text, f.details
+        from public.attention_flags f join public.enrolments e on e.id = f.enrolment_id
+        join public.organisation_members m on m.id = e.member_id join public.cohorts h on h.id = e.cohort_id
+        where f.organisation_id = ${org.id} and f.cleared_at is null and f.resolved_at is null and f.raised_at > ${since}
+          and e.cohort_id in (select x.cohort_id from public.cohort_course_trainers t join public.cohort_courses x on x.id = t.cohort_course_id where t.member_id = ${t.id})
+        order by f.raised_at desc
+      `,
+    ])
+    const waiting = queue.filter((q) => q.to_grade > 0)
+    const total = waiting.reduce((sum, q) => sum + q.to_grade, 0)
+    if (total) {
+      n += await deliver(deps, {
+        organisationId: org.id,
+        to: { memberIds: [t.id] },
+        event: 'submissions_to_grade',
+        title: `${total} submission${total === 1 ? '' : 's'} to grade`,
+        body: waiting.length === 1 ? `${waiting[0]!.title} · ${waiting[0]!.cohort}` : `${waiting.length} assignments`,
+        link: '/trainer/grading',
+        email: {
+          subject: `${total} submission${total === 1 ? '' : 's'} waiting for your grade`,
+          title: 'Submissions to grade',
+          intro: (first) => `Hi ${first}, these submissions are waiting for your grade, oldest deadline first.`,
+          details: [
+            ...waiting.slice(0, 6).map((q, i) => ({ label: i === 0 ? 'Waiting' : '', value: `${q.title} · ${q.cohort} — ${q.to_grade}` })),
+            ...(waiting.length > 6 ? [{ label: '', value: `and ${waiting.length - 6} more assignments` }] : []),
+          ],
+          buttonLabel: 'Open grading',
+          footer: `Sent at ${org.digest} because grading reminders are on. Change them in Settings.`,
+        },
+      })
+    }
+    if (flags.length) {
+      const people = new Set(flags.map((x) => `${x.first_name} ${x.last_name}`))
+      const first = flags[0]!
+      n += await deliver(deps, {
+        organisationId: org.id,
+        to: { memberIds: [t.id] },
+        event: 'participant_flagged',
+        title: people.size === 1 ? `${first.first_name} ${first.last_name} was flagged` : `${people.size} participants were flagged`,
+        body: people.size === 1 ? `${(flagText[first.rule] ?? (() => 'needs follow-up'))(first.details ?? {})} · ${first.cohort}` : 'In the cohorts you teach',
+        link: '/trainer/participants',
+        email: {
+          subject: people.size === 1 ? `${first.first_name} ${first.last_name} may need attention` : `${people.size} participants may need attention`,
+          title: 'Participants who may need attention',
+          intro: (name) => `Hi ${name}, these participants in the cohorts you teach were flagged since yesterday. Your programme team follows up; you may want to check in during your next session.`,
+          details: flags.slice(0, 6).map((x, i) => ({
+            label: i === 0 ? 'Flagged' : '',
+            value: `${x.first_name} ${x.last_name} · ${x.cohort} — ${(flagText[x.rule] ?? (() => 'needs follow-up'))(x.details ?? {})}`,
+          })),
+          buttonLabel: 'Open my participants',
+          footer: 'Flags are signals to check, not judgements. Change these emails in Settings.',
+        },
+      })
+    }
+  }
+  return n
+}
+
 /** F1.11: after 30 days, the workspace and everything in it are deleted, files and sign-ins included. */
 async function purgeDeletedOrganisations(deps: SchedulerDeps, now: Date) {
   const due = await deps.sql<{ id: string }[]>`
@@ -409,6 +509,8 @@ async function purgeDeletedOrganisations(deps: SchedulerDeps, now: Date) {
         const rows = await deps.sql<{ path: string }[]>`select storage_path as path from ${deps.sql('public.' + table_name)} where organisation_id = ${org.id} and storage_path is not null`
         paths.push(...rows.map((r) => r.path))
       }
+      const photos = await deps.sql<{ path: string }[]>`select photo_path as path from public.organisation_members where organisation_id = ${org.id} and photo_path is not null`
+      paths.push(...photos.map((r) => r.path))
       const users = await deps.sql<{ user_id: string }[]>`select user_id from public.organisation_members where organisation_id = ${org.id} and user_id is not null`
       await deps.sql.begin(async (tx) => {
         await tx`select set_config('synqop.purging', 'on', true)`

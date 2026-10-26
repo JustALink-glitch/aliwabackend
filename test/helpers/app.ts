@@ -78,6 +78,9 @@ export function fakeStorage() {
     async downloadUrl(path, fileName) {
       return `https://storage.example/download/${path}?download=${encodeURIComponent(fileName)}`
     },
+    async viewUrl(path) {
+      return `https://storage.example/view/${path}`
+    },
     async remove(paths) {
       for (const p of paths) {
         objects.delete(p)

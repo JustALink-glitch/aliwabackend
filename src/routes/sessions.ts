@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
-import { notify as inApp } from '../lib/notifications.js'
+import { EVENTS, notify as inApp } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
 import { audit, type Sql, type Tx } from '../lib/db.js'
+import type { Role } from '../lib/roles.js'
 import { AppError, forbidden, notFound } from '../lib/errors.js'
 import { renderEmail } from '../lib/mailer.js'
 import { can, staffScope, teachingIds, type StaffScope } from '../lib/staff.js'
@@ -235,9 +236,18 @@ export function sessionRoutes(deps: AppDeps) {
   }
 
   async function notify(
-    input: { organisationId: string; organisationName: string; cohortId: string; trainerId: string | null; subject: string; intro: (firstName: string) => string; sessionId: string },
+    input: {
+      organisationId: string
+      organisationName: string
+      cohortId: string
+      trainerId: string | null
+      actorId: string
+      subject: string
+      intro: (firstName: string) => string
+      sessionId: string
+    },
   ) {
-    // In the participants' bell too (G1.01), unless they switched it off.
+    // In the participants' and trainer's bell too (G1.01), unless they switched it off. Not the person who made the change.
     const enrolled = await deps.sql<{ id: string }[]>`
       select e.member_id as id from public.enrolments e where e.cohort_id = ${input.cohortId} and e.status = 'active'
     `
@@ -248,16 +258,24 @@ export function sessionRoutes(deps: AppDeps) {
       title: input.subject,
       link: `/participant/sessions/${input.sessionId}`,
     })
-    const people = await deps.sql<{ email: string; first_name: string }[]>`
-      select m.email, m.first_name from public.organisation_members m
-      join public.enrolments e on e.member_id = m.id and e.cohort_id = ${input.cohortId} and e.status = 'active'
-      where m.status <> 'deactivated'
-      union
-      select m.email, m.first_name from public.organisation_members m
-      where m.id = ${input.trainerId} and m.status <> 'deactivated'
+    if (input.trainerId && input.trainerId !== input.actorId) {
+      await inApp(deps.sql, {
+        organisationId: input.organisationId,
+        to: { memberIds: [input.trainerId] },
+        event: 'session_changed',
+        title: input.subject,
+        link: `/trainer/sessions/${input.sessionId}`,
+      })
+    }
+    // Email, for everyone who hasn't switched it off (T9.02 / P8.02).
+    const people = await deps.sql<{ email: string; first_name: string; role: Role; by_email: boolean | null }[]>`
+      select m.email, m.first_name, m.role, p.email as by_email from public.organisation_members m
+      left join public.notification_preferences p on p.member_id = m.id and p.event = 'session_changed'
+      where m.status <> 'deactivated' and m.id <> ${input.actorId}
+        and (m.id = ${input.trainerId} or exists (select 1 from public.enrolments e where e.member_id = m.id and e.cohort_id = ${input.cohortId} and e.status = 'active'))
     `
     let sent = 0
-    for (const person of people) {
+    for (const person of people.filter((p) => p.by_email ?? EVENTS[p.role]?.find((e) => e.key === 'session_changed')?.email ?? true)) {
       const { text, html } = renderEmail({
         title: input.subject,
         intro: `Hi ${person.first_name}, ${input.intro(person.first_name)}`,
@@ -502,6 +520,7 @@ export function sessionRoutes(deps: AppDeps) {
             organisationId,
             organisationName,
             cohortId: session.cohort_id,
+            actorId,
             trainerId: body.trainerMemberId ?? session.trainer_member_id,
             sessionId: session.id,
             subject: `${session.course_name}: session changed`,
@@ -543,6 +562,7 @@ export function sessionRoutes(deps: AppDeps) {
             organisationId,
             organisationName,
             cohortId: session.cohort_id,
+            actorId,
             trainerId: session.trainer_member_id,
             sessionId: session.id,
             subject: `Cancelled: ${session.course_name}, ${describeWhen(session, tz)}`,

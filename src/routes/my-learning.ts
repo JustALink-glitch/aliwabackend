@@ -33,6 +33,7 @@ interface MySessionRow {
   enrolment_status: string
   trainer_first: string | null
   trainer_last: string | null
+  trainer_bio: string | null
   number: number | null
   total: number
   mark: Mark | null
@@ -55,6 +56,7 @@ function selectMySessions(sql: Sql, auth: AuthContext, filter: { id?: string; co
            x.id as cohort_course_id, co.id as course_id, co.name as course_name, h.id as cohort_id, h.name as cohort_name,
            e.status as enrolment_status,
            coalesce(t.first_name, lt.first_name) as trainer_first, coalesce(t.last_name, lt.last_name) as trainer_last,
+           case when t.id is not null then t.bio else lt.bio end as trainer_bio,
            n.number::int as number,
            greatest(coalesce(x.planned_session_count, 0),
                     (select count(*)::int from public.sessions y where y.cohort_course_id = x.id and y.cancelled_at is null)) as total,
@@ -97,6 +99,7 @@ function toSession(r: MySessionRow, now: number) {
     joinUrl: joinable ? r.zoom_join_url : null,
     cancellationReason: r.cancellation_reason,
     trainer: name(r.trainer_first, r.trainer_last),
+    trainerBio: r.trainer_bio,
     number: r.number,
     total: r.total,
     attendance: r.mark

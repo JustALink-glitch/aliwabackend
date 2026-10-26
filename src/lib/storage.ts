@@ -16,6 +16,8 @@ export interface FileStorage {
   stat(path: string): Promise<{ size: number; type: string | null } | null>
   /** A download link valid for 5 minutes that saves the file under `fileName`. */
   downloadUrl(path: string, fileName: string): Promise<string>
+  /** A link to show the file in the page (e.g. a profile photo), valid for `seconds`. */
+  viewUrl(path: string, seconds: number): Promise<string>
   remove(paths: string[]): Promise<void>
   /** The file's bytes, or null if it's gone. For data exports (F1.10). */
   read(path: string): Promise<Uint8Array | null>
@@ -40,6 +42,11 @@ export function createSupabaseStorage(supabase: SupabaseClient): FileStorage {
     },
     async downloadUrl(path, fileName) {
       const { data, error } = await bucket().createSignedUrl(path, 300, { download: fileName })
+      if (error) throw error
+      return data.signedUrl
+    },
+    async viewUrl(path, seconds) {
+      const { data, error } = await bucket().createSignedUrl(path, seconds)
       if (error) throw error
       return data.signedUrl
     },
