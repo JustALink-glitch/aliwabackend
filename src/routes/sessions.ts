@@ -83,6 +83,12 @@ interface SessionRow {
   location: string | null
   zoom_join_url: string | null
   zoom_meeting_id: string | null
+  zoom_managed: boolean
+  zoom_sync_error: string | null
+  zoom_import_error: string | null
+  attendance_imported_at: Date | null
+  zoom_unmatched: number
+  zoom_connected: boolean
   cancelled_at: Date | null
   cancellation_reason: string | null
   cancelled_by_first_name: string | null
@@ -119,6 +125,9 @@ function selectSessions(sql: Sql | Tx, organisationId: string, filter: { id?: st
     select s.id, s.cohort_course_id, s.series_id, ss.rrule,
            (select count(*)::int from public.sessions x where x.series_id = s.series_id) as series_count,
            s.starts_at, s.ends_at, public.status(s) as status, s.mode, s.location, s.zoom_join_url, s.zoom_meeting_id,
+           s.zoom_managed, s.zoom_sync_error, s.zoom_import_error, s.attendance_imported_at,
+           (select count(*)::int from public.zoom_unmatched_attendees u where u.session_id = s.id and u.resolved_at is null and not u.dismissed) as zoom_unmatched,
+           exists (select 1 from public.zoom_connections z where z.organisation_id = s.organisation_id and z.broken_at is null) as zoom_connected,
            s.cancelled_at, s.cancellation_reason, cb.first_name as cancelled_by_first_name, cb.last_name as cancelled_by_last_name,
            s.trainer_member_id, t.first_name as trainer_first_name, t.last_name as trainer_last_name,
            (select ct.is_lead from public.cohort_course_trainers ct where ct.cohort_course_id = s.cohort_course_id and ct.member_id = s.trainer_member_id) as trainer_is_lead,
@@ -165,6 +174,15 @@ const toSession = (row: SessionRow) => ({
   location: row.location,
   joinUrl: row.zoom_join_url,
   zoomMeetingId: row.zoom_meeting_id,
+  // C1.03 / C2.01: where Zoom is with this session.
+  zoom: {
+    managed: row.zoom_managed,
+    // Connected Zoom will create a meeting for an online session with no pasted link.
+    pending: row.zoom_connected && !row.zoom_managed && row.mode === 'online' && !row.zoom_join_url && !row.cancelled_at,
+    problem: row.zoom_sync_error ?? row.zoom_import_error,
+    importedAt: row.attendance_imported_at,
+    unmatched: row.zoom_unmatched,
+  },
   trainer: row.trainer_member_id
     ? { id: row.trainer_member_id, name: `${row.trainer_first_name} ${row.trainer_last_name}`, isLead: Boolean(row.trainer_is_lead) }
     : null,
@@ -454,7 +472,13 @@ export function sessionRoutes(deps: AppDeps) {
               update public.sessions s
               set starts_at = (${id === session.id ? body.date : tx`(s.starts_at at time zone ${tz})::date`}::date + ${body.start}::time) at time zone ${tz},
                   ends_at = (${id === session.id ? body.date : tx`(s.starts_at at time zone ${tz})::date`}::date + ${body.end}::time) at time zone ${tz},
-                  mode = ${body.mode}, location = ${body.location}, zoom_join_url = ${body.mode === 'online' ? body.joinUrl : null},
+                  mode = ${body.mode}, location = ${body.location},
+                  -- A meeting Synqop made stays unless the session moves in person or someone pastes another link (C1.06).
+                  zoom_join_url = case when ${body.mode} <> 'online' then null
+                                       when s.zoom_managed and (${body.joinUrl}::text is null or ${body.joinUrl}::text = s.zoom_join_url) then s.zoom_join_url
+                                       else ${body.joinUrl}::text end,
+                  zoom_managed = s.zoom_managed and ${body.mode} = 'online' and (${body.joinUrl}::text is null or ${body.joinUrl}::text = s.zoom_join_url),
+                  zoom_sync_needed = s.zoom_managed,
                   trainer_member_id = ${body.trainerMemberId}, updated_at = now()
               where s.id = ${id}
             `
@@ -499,7 +523,7 @@ export function sessionRoutes(deps: AppDeps) {
         if (session.status !== 'scheduled') throw new AppError(409, 'session_started', 'This session has started or been held, so it can’t be cancelled.')
         await deps.sql.begin(async (tx) => {
           await tx`
-            update public.sessions set cancelled_at = now(), cancellation_reason = ${body.reason}, cancelled_by = ${actorId}, updated_at = now()
+            update public.sessions set cancelled_at = now(), cancellation_reason = ${body.reason}, cancelled_by = ${actorId}, zoom_sync_needed = zoom_managed, updated_at = now()
             where id = ${session.id}
           `
           await audit(tx, {

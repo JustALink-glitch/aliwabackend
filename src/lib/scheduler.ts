@@ -4,6 +4,8 @@ import type { Sql } from './db.js'
 import type { Mailer } from './mailer.js'
 import { deliver } from './notifications.js'
 import type { FileStorage } from './storage.js'
+import { syncZoom } from './zoom-sync.js'
+import type { TokenBox, ZoomApi } from './zoom.js'
 
 /**
  * Scheduled work (X2): reminders, overdue alerts, the admins' daily digest and the 30-day deletion.
@@ -16,13 +18,16 @@ export interface SchedulerDeps {
   appUrl: string
   storage: FileStorage
   authAdmin: AuthAdmin
+  /** Set when this server has Zoom app credentials (F1.07). */
+  zoom?: ZoomApi | null
+  zoomBox?: TokenBox | null
 }
 
 /** How far back a missed alert is still worth sending, e.g. after the API was off for a while. */
 const LOOKBACK_HOURS = 72
 const LOOKBACK_DAYS = 14
 
-export type JobCounts = Record<'sessionReminders' | 'assignmentReminders' | 'reportReminders' | 'reportsOverdue' | 'attendanceMissing' | 'digests' | 'deleted', number>
+export type JobCounts = Record<'zoom' | 'sessionReminders' | 'assignmentReminders' | 'reportReminders' | 'reportsOverdue' | 'attendanceMissing' | 'digests' | 'deleted', number>
 
 interface Org {
   id: string
@@ -52,7 +57,7 @@ async function claim(sql: Sql, organisationId: string, key: string) {
 }
 
 export async function runScheduledJobs(deps: SchedulerDeps, now = new Date()): Promise<JobCounts> {
-  const counts: JobCounts = { sessionReminders: 0, assignmentReminders: 0, reportReminders: 0, reportsOverdue: 0, attendanceMissing: 0, digests: 0, deleted: 0 }
+  const counts: JobCounts = { zoom: 0, sessionReminders: 0, assignmentReminders: 0, reportReminders: 0, reportsOverdue: 0, attendanceMissing: 0, digests: 0, deleted: 0 }
   counts.deleted = await purgeDeletedOrganisations(deps, now)
 
   // Workspaces scheduled for deletion are read-only: nothing to remind anyone about.
@@ -67,6 +72,10 @@ export async function runScheduledJobs(deps: SchedulerDeps, now = new Date()): P
   `
   for (const org of orgs) {
     try {
+      if (org.zoom && deps.zoom && deps.zoomBox) {
+        const z = await syncZoom({ ...deps, zoom: deps.zoom, box: deps.zoomBox }, org.id, now)
+        counts.zoom += z.created + z.updated + z.deleted + z.registered + z.imported
+      }
       counts.sessionReminders += await sessionReminders(deps, org, now)
       counts.assignmentReminders += await assignmentReminders(deps, org, now)
       const reports = await sessionReports(deps, org, now)

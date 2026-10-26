@@ -78,7 +78,7 @@ describe.skipIf(!TEST_DATABASE_URL)('settings part A (F1.01, F1.02, F1.04, F1.07
   it('saves attendance and Zoom settings (F1.07)', async () => {
     const s = (await get('/v1/settings/attendance')).body.settings as Record<string, unknown>
     expect(s).toEqual({
-      zoom: { connected: false, email: null },
+      zoom: { available: false, connected: false, email: null, connectedAt: null, problem: null, lastImportAt: null },
       joinLinks: 'personal',
       presentMinPct: 70,
       late: { enabled: true, minutes: 10 },

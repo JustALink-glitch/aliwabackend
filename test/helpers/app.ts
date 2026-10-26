@@ -4,6 +4,7 @@ import type { AuthAdmin } from '../../src/lib/auth-admin.js'
 import type { Sql } from '../../src/lib/db.js'
 import type { EmailMessage, Mailer } from '../../src/lib/mailer.js'
 import type { FileStorage } from '../../src/lib/storage.js'
+import type { TokenBox, ZoomApi } from '../../src/lib/zoom.js'
 
 /** Supabase Auth stand-in backed by the stub auth.users table. */
 export function fakeAuthAdmin(sql: Sql) {
@@ -89,7 +90,7 @@ export function fakeStorage() {
 /**
  * App wired to a real test database. Tokens are "user:<uuid>:<email>" so tests can act as anyone.
  */
-export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
+export function testApp(sql: Sql, options: { now?: () => Date; zoom?: ZoomApi; zoomBox?: TokenBox } = {}) {
   const auth = fakeAuthAdmin(sql)
   const mail = fakeMailer()
   const files = fakeStorage()
@@ -108,6 +109,7 @@ export function testApp(sql: Sql, options: { now?: () => Date } = {}) {
     storage: files.storage,
     log: false,
     ...(options.now && { now: options.now }),
+    ...(options.zoom && { zoom: options.zoom, zoomBox: options.zoomBox ?? null }),
   })
   return { app, auth, mail, files }
 }

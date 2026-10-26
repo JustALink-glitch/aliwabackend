@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto'
 import { Hono } from 'hono'
 import { runScheduledJobs } from './lib/scheduler.js'
+import type { TokenBox, ZoomApi } from './lib/zoom.js'
+import { zoomRoutes } from './routes/zoom.js'
 import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
@@ -51,6 +53,9 @@ export interface AppDeps {
   awaitJobs?: boolean
   /** Clock, injectable for tests. */
   now?: () => Date
+  /** Zoom app (F1.07). Null when this server has no Zoom keys. */
+  zoom?: ZoomApi | null
+  zoomBox?: TokenBox | null
   /** Lets an outside cron run scheduled jobs (POST /v1/internal/run-jobs). Off when unset. */
   cronSecret?: string
   /** Show internal error messages in responses. Never true in production. */
@@ -102,6 +107,7 @@ export function createApp(deps: AppDeps) {
   app.route('/v1/privacy', privacyRoutes(deps))
   app.route('/v1/notifications', notificationRoutes(deps))
   app.route('/v1/search', searchRoutes(deps))
+  app.route('/v1/zoom', zoomRoutes(deps))
 
   // X2: for hosts that sleep between requests, an outside cron can run the scheduled jobs.
   app.post('/v1/internal/run-jobs', async (c) => {

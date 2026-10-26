@@ -209,10 +209,22 @@ export function settingsRoutes(deps: AppDeps) {
                recordings_shared as rec_on, recording_retention_days as rec_days, in_person_reminder_enabled as remind_on, in_person_reminder_hours as remind
         from public.organisation_settings where organisation_id = ${organisationId}
       `,
-      deps.sql<{ email: string | null }[]>`select zoom_user_email as email from public.zoom_connections where organisation_id = ${organisationId}`,
+      deps.sql<{ email: string | null; connected_at: Date; broken_reason: string | null; last_import: Date | null }[]>`
+        select z.zoom_user_email as email, z.connected_at, z.broken_reason,
+               (select max(attendance_imported_at) from public.sessions where organisation_id = z.organisation_id and zoom_meeting_id is not null) as last_import
+        from public.zoom_connections z where z.organisation_id = ${organisationId}
+      `,
     ])
     return {
-      zoom: zoom ? { connected: true, email: zoom.email } : { connected: false, email: null },
+      zoom: {
+        // Whether this server has Zoom app keys at all.
+        available: Boolean(deps.zoom),
+        connected: Boolean(zoom),
+        email: zoom?.email ?? null,
+        connectedAt: zoom?.connected_at ?? null,
+        problem: zoom?.broken_reason ?? null,
+        lastImportAt: zoom?.last_import ?? null,
+      },
       joinLinks: s!.links,
       presentMinPct: s!.present,
       late: { enabled: s!.late_on, minutes: s!.late },

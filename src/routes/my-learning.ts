@@ -51,7 +51,7 @@ function selectMySessions(sql: Sql, auth: AuthContext, filter: { id?: string; co
                   then row_number() over (partition by s.cohort_course_id, (s.cancelled_at is null) order by s.starts_at) end as number
       from public.sessions s where s.organisation_id = ${auth.organisationId}
     )
-    select s.id, s.starts_at, s.ends_at, public.status(s) as status, s.mode, s.location, s.zoom_join_url, s.cancellation_reason,
+    select s.id, s.starts_at, s.ends_at, public.status(s) as status, s.mode, s.location, coalesce(jl.join_url, s.zoom_join_url) as zoom_join_url, s.cancellation_reason,
            x.id as cohort_course_id, co.id as course_id, co.name as course_name, h.id as cohort_id, h.name as cohort_name,
            e.status as enrolment_status,
            coalesce(t.first_name, lt.first_name) as trainer_first, coalesce(t.last_name, lt.last_name) as trainer_last,
@@ -69,6 +69,8 @@ function selectMySessions(sql: Sql, auth: AuthContext, filter: { id?: string; co
     left join public.cohort_course_trainers ct on ct.cohort_course_id = x.id and ct.is_lead
     left join public.organisation_members lt on lt.id = ct.member_id
     left join public.attendance_records a on a.session_id = s.id and a.member_id = e.member_id
+    -- F1.07 personal join links: their own Zoom link when Zoom registered them.
+    left join public.session_join_links jl on jl.session_id = s.id and jl.member_id = e.member_id
     where e.member_id = ${auth.memberId} and e.organisation_id = ${auth.organisationId}
       and e.status in ('active', 'completed')
       ${filter.id ? sql`and s.id = ${filter.id}` : sql``}

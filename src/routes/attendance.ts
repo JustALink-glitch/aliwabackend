@@ -6,6 +6,7 @@ import type { AuthContext } from '../lib/auth.js'
 import { AppError, forbidden, notFound } from '../lib/errors.js'
 import { shortName } from '../lib/names.js'
 import { can, staffScope } from '../lib/staff.js'
+import { markFor } from '../lib/zoom-sync.js'
 import { optionalText, parseBody, uuid } from '../lib/validation.js'
 import type { AuthVariables } from '../middleware/auth.js'
 
@@ -16,6 +17,11 @@ const SaveRegister = z.object({
     .array(z.object({ memberId: uuid, status: Status, note: optionalText(300) }))
     .min(1, 'Mark at least one person.')
     .max(1000),
+})
+
+const ZoomMatches = z.object({
+  matches: z.array(z.object({ id: uuid, memberId: uuid })).max(500).default([]),
+  ignore: z.array(uuid).max(500).default([]),
 })
 
 const EditMark = z.object({
@@ -118,8 +124,15 @@ export function attendanceRoutes(deps: AppDeps) {
           else counts.notRecorded++
         }
         const recorded = counts.present + counts.absent + counts.excused
+        const [zoom] = await deps.sql<{ meeting: boolean; imported_at: Date | null; unmatched: number; problem: string | null }[]>`
+          select s.zoom_meeting_id is not null as meeting, s.attendance_imported_at as imported_at, s.zoom_import_error as problem,
+                 (select count(*)::int from public.zoom_unmatched_attendees u where u.session_id = s.id and u.resolved_at is null and not u.dismissed) as unmatched
+          from public.sessions s where s.id = ${session.id}
+        `
         return c.json({
           status: session.status,
+          // C2.01: Zoom imports the register once the meeting ends; C2.04 for names it couldn't match.
+          zoom: { meeting: zoom!.meeting, importedAt: zoom!.imported_at, unmatched: zoom!.unmatched, problem: zoom!.problem },
           counts,
           expected: rows.filter((r) => r.enrolment_status === 'active').length,
           rate: recorded ? Math.round((counts.present / recorded) * 100) : null,
@@ -138,6 +151,96 @@ export function attendanceRoutes(deps: AppDeps) {
             note: r.note,
           })),
         })
+      })
+
+      // C2.04 / T4.04 Zoom attendees Synqop couldn't match by email, with a suggestion for each.
+      .get('/:id/attendance/zoom', async (c) => {
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'))
+        const [attendees, register] = await Promise.all([
+          deps.sql<{ id: string; display_name: string; email: string | null; joined_at: Date | null; minutes_in_meeting: number | null }[]>`
+            select id, display_name, email, joined_at, minutes_in_meeting from public.zoom_unmatched_attendees
+            where session_id = ${session.id} and resolved_at is null and not dismissed order by display_name
+          `,
+          selectRegister(deps.sql, session),
+        ])
+        const people = register.filter((r) => r.enrolment_status === 'active')
+        // Suggest someone not yet counted as present whose name shares a word with the Zoom name.
+        const words = (v: string) => v.toLowerCase().split(/[^\p{L}]+/u).filter((w) => w.length > 1)
+        const suggest = (name: string, email: string | null) => {
+          const zoomWords = new Set([...words(name), ...(email ? words(email.split('@')[0]!) : [])])
+          const scored = people
+            .filter((p) => p.status !== 'present')
+            .map((p) => ({ p, score: words(`${p.first_name} ${p.last_name}`).filter((w) => zoomWords.has(w) || [...zoomWords].some((z) => z.length > 2 && w.startsWith(z))).length }))
+            .filter((x) => x.score > 0)
+            .sort((a, b) => b.score - a.score)
+          return scored.length && (scored.length === 1 || scored[0]!.score > scored[1]!.score) ? scored[0]!.p.member_id : null
+        }
+        return c.json({
+          attendees: attendees.map((a) => ({
+            id: a.id,
+            name: a.display_name,
+            email: a.email,
+            joinedAt: a.joined_at,
+            minutes: a.minutes_in_meeting ?? 0,
+            suggestedMemberId: suggest(a.display_name, a.email),
+          })),
+          participants: people.map((p) => ({ memberId: p.member_id, name: `${p.first_name} ${p.last_name}`.trim(), status: p.status, source: p.source })),
+        })
+      })
+
+      // Matched names count with the Zoom rules; ignored names aren't counted. Hand-made marks are kept.
+      .post('/:id/attendance/zoom', async (c) => {
+        const body = await parseBody(c, ZoomMatches)
+        const { organisationId, memberId: actorId } = c.var.auth
+        const session = await findSession(deps.sql, c.var.auth, c.req.param('id'), true)
+        const result = await deps.sql.begin(async (tx) => {
+          const [s] = await tx<{ starts_at: Date; ends_at: Date; present_pct: number; late_on: boolean; late_minutes: number }[]>`
+            select s.starts_at, s.ends_at, st.zoom_present_min_pct::int as present_pct, st.zoom_late_enabled as late_on, st.zoom_late_after_minutes as late_minutes
+            from public.sessions s join public.organisation_settings st on st.organisation_id = s.organisation_id where s.id = ${session.id}
+          `
+          const enrolled = new Set(
+            (await tx<{ id: string }[]>`select member_id as id from public.enrolments where cohort_id = ${session.cohort_id} and status = 'active'`).map((r) => r.id),
+          )
+          let matched = 0
+          let kept = 0
+          for (const m of body.matches) {
+            if (!enrolled.has(m.memberId)) throw new AppError(400, 'bad_request', 'Some fields need attention.', [{ field: 'matches', message: 'Choose someone in this cohort.' }])
+            const [a] = await tx<{ joined_at: Date | null; minutes_in_meeting: number | null }[]>`
+              update public.zoom_unmatched_attendees set matched_member_id = ${m.memberId}, resolved_by = ${actorId}, resolved_at = now()
+              where id = ${m.id} and session_id = ${session.id} and resolved_at is null returning joined_at, minutes_in_meeting
+            `
+            if (!a) continue
+            matched++
+            // Two Zoom names can be the same person (phone and laptop): add their minutes together.
+            const [prev] = await tx<{ minutes_in_meeting: number | null; joined_at: Date | null; source: string }[]>`
+              select minutes_in_meeting, joined_at, source from public.attendance_records where session_id = ${session.id} and member_id = ${m.memberId}
+            `
+            if (prev && prev.source !== 'zoom') {
+              kept++
+              continue
+            }
+            const minutes = (prev?.minutes_in_meeting ?? 0) + (a.minutes_in_meeting ?? 0)
+            const joinedAt = [prev?.joined_at, a.joined_at].filter((d): d is Date => Boolean(d)).sort((x, y) => x.getTime() - y.getTime())[0] ?? null
+            const mark = markFor(s!, joinedAt, minutes)
+            await tx`
+              insert into public.attendance_records (organisation_id, session_id, member_id, status, source, joined_at, minutes_in_meeting, is_late, recorded_by)
+              values (${organisationId}, ${session.id}, ${m.memberId}, ${mark.status}, 'zoom', ${joinedAt}, ${minutes}, ${mark.late}, ${actorId})
+              on conflict (session_id, member_id) do update set status = excluded.status, joined_at = excluded.joined_at,
+                minutes_in_meeting = excluded.minutes_in_meeting, is_late = excluded.is_late, recorded_by = excluded.recorded_by, updated_at = now()
+            `
+          }
+          const ignored = body.ignore.length
+            ? (
+                await tx`
+                  update public.zoom_unmatched_attendees set dismissed = true, resolved_by = ${actorId}, resolved_at = now()
+                  where session_id = ${session.id} and id = any(${body.ignore}::uuid[]) and resolved_at is null returning id
+                `
+              ).length
+            : 0
+          await audit(tx, { organisationId, actorMemberId: actorId, action: 'attendance.zoom_matched', entityType: 'session', entityId: session.id, data: { matched, ignored, kept }, requestId: c.var.requestId })
+          return { matched, ignored, kept }
+        })
+        return c.json(result)
       })
 
       // C2.03 Save register: marks people who aren't marked yet. Changing a mark goes through C2.02 with a reason.

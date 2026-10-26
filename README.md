@@ -123,6 +123,10 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/privacy/exports` | Owner | F1.10 — ZIP of CSVs (and submission files if asked), ready for 7 days; emails the owner |
 | `GET` | `/v1/privacy/exports/:id/file` | Owner | F1.10 — download the ZIP |
 | `POST` `DELETE` | `/v1/privacy/deletion` | Owner | F1.11 — schedule (type the name; read-only for 30 days, everyone emailed) or cancel |
+| `POST` | `/v1/zoom/connect` | Owner, admin | F1.07 — Zoom's approval URL (signed state, 10 minutes) |
+| `GET` | `/v1/zoom/callback` | Public (Zoom redirect) | F1.07 — swaps the code for tokens (stored encrypted), back to Settings with `?zoom=connected` |
+| `DELETE` | `/v1/zoom/connection` | Owner, admin | F1.07 — disconnect; existing meetings stay in Zoom |
+| `GET` `POST` | `/v1/sessions/:id/attendance/zoom` | Staff on the session | C2.04 / T4.04 — Zoom names that didn't match by email, with suggestions; save matches and ignores |
 | `GET` `PUT` | `/v1/settings/completion` | Owner, admin | F1.05 — completion criteria, issuing, signatory, certificate title, default outcomes |
 | `GET` `PUT` | `/v1/settings/attention-rules` | Owner, admin | F1.06 — signals, who sees flags, how they close; with how many are flagged now |
 | `GET` | `/v1/my/progress` | Participant | P7.01 — progress against the completion rule |
@@ -238,3 +242,22 @@ doesn't flood anyone. Everyone's Email / In-app choices are respected.
 
 Hosts that sleep between requests can set `SCHEDULER=off` and have a cron call
 `POST /v1/internal/run-jobs` with `Authorization: Bearer <CRON_SECRET>` every few minutes.
+
+## Zoom (F1.07)
+
+With `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET` and `ZOOM_REDIRECT_URL` set, an Owner or Admin connects the
+organisation's Zoom account in Settings › Attendance & Zoom. Then, from the scheduler every minute:
+
+- every upcoming online session **without a pasted link** gets a Zoom meeting (moved when the time changes,
+  removed when cancelled, moved in person or replaced by a pasted link);
+- with personal join links on, everyone in the cohort is registered and sees their own link on the session;
+- 10 minutes after a meeting ends, the participants report is imported: present if in the meeting for at least
+  the set share of the session, late after the set minutes; hand-made marks are never changed; names that don't
+  match anyone by email go to C2.04 and admins and the trainer are told.
+
+Tokens are encrypted with a key derived from the client secret (changing the secret means connecting again).
+If Zoom stops accepting the tokens, the connection shows "needs connecting again" and nothing is sent to Zoom.
+
+The Zoom app needs these scopes: `user:read:user`, `meeting:write:meeting`, `meeting:update:meeting`,
+`meeting:delete:meeting`, `meeting:write:registrant` and `report:read:list_meeting_participants:admin`
+(the participants report needs a paid Zoom plan and is approved by a Zoom admin).

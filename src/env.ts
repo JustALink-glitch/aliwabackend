@@ -21,6 +21,14 @@ const EnvSchema = z.object({
   /** Optional: without it, emails are printed to the console. */
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('Synqop <onboarding@resend.dev>'),
+  /** Zoom app (F1.07) from marketplace.zoom.us. All three or none. */
+  ZOOM_CLIENT_ID: z.string().optional(),
+  ZOOM_CLIENT_SECRET: z.string().optional(),
+  /** The API's address + /v1/zoom/callback, e.g. http://localhost:5000/v1/zoom/callback. Must match the Zoom app. */
+  ZOOM_REDIRECT_URL: z.url().optional(),
+  /** Only for local end-to-end checks against a Zoom stand-in. Leave unset. */
+  ZOOM_OAUTH_BASE: z.url().optional(),
+  ZOOM_API_BASE: z.url().optional(),
   /** Reminders, digests and the 30-day deletion run every minute inside the API. "off" if an outside cron calls /v1/internal/run-jobs instead. */
   SCHEDULER: z.enum(['on', 'off']).default('on'),
   /** Optional: lets an outside cron call POST /v1/internal/run-jobs with "Authorization: Bearer <CRON_SECRET>". */
@@ -40,6 +48,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
   if (result.data.NODE_ENV === 'production' && !result.data.RESEND_API_KEY) {
     throw new Error('Invalid environment configuration:\n  - RESEND_API_KEY: required in production')
+  }
+  const zoom = [result.data.ZOOM_CLIENT_ID, result.data.ZOOM_CLIENT_SECRET, result.data.ZOOM_REDIRECT_URL].filter(Boolean).length
+  if (zoom > 0 && zoom < 3) {
+    throw new Error('Invalid environment configuration:\n  - ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET and ZOOM_REDIRECT_URL: set all three, or none')
   }
   return result.data
 }
