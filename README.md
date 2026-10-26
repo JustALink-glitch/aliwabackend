@@ -29,6 +29,9 @@ Product rules and screens: *Synqop Development Reference V1* and the Figma file 
 | `POST` | `/v1/members` | Owner, admin | B1.02 / B2.03 — invite; emails a 72-hour link |
 | `POST` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — resend (old link stops working) |
 | `DELETE` | `/v1/members/:id/invitation` | Owner, admin | B2.02i — revoke: cancels the link and removes the not-yet-joined person |
+| `POST` `DELETE` | `/v1/members/:id/assignments` · `/:cohortCourseId` | Owner, admin | B2.04 — assign to a course in a cohort as lead (the old lead becomes an assistant) or assistant; take off |
+| `PATCH` | `/v1/members/:id` | Owner, admin | B2.05 — name, email (sign-in email changed in Auth too; the new address is told), phone |
+| `POST` | `/v1/members/:id/deactivate` · `/reactivate` | Owner, admin | B2.06 — no sign-in, upcoming sessions show no trainer, courses kept for reactivation |
 | `PATCH` | `/v1/members/:id/role` | Owner, admin | F1.02b — admin, trainer or assistant trainer; never the owner or yourself |
 | `DELETE` | `/v1/members/:id` | Owner, admin | F1.02c — remove: no more sign-in, off what they teach; their records stay. Invite the same email to bring them back |
 | `GET` | `/v1/programmes` | Owner, admin | A1.01 — programmes with status (Draft · Active · Archived) and counts |

@@ -31,6 +31,12 @@ export function fakeAuthAdmin(sql: Sql) {
       deleted.push(userId)
       await sql`delete from auth.users where id = ${userId}`
     },
+    async updateEmail(userId, email) {
+      const [taken] = await sql`select 1 from auth.users where lower(email) = ${email.toLowerCase()} and id <> ${userId}`
+      if (taken) return { ok: false, reason: 'email_exists' }
+      await sql`update auth.users set email = ${email} where id = ${userId}`
+      return { ok: true }
+    },
     async generateRecoveryLink(email, redirectTo) {
       const [row] = await sql`select id from auth.users where lower(email) = ${email.toLowerCase()}`
       if (!row) return null

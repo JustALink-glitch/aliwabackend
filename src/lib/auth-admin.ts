@@ -13,6 +13,8 @@ export interface AuthAdmin {
   deleteUser(userId: string): Promise<void>
   /** A one-time password-reset link (valid 1 hour), or null if no account uses this email. Sends nothing. */
   generateRecoveryLink(email: string, redirectTo: string): Promise<string | null>
+  /** B2.05: change someone's sign-in email (an admin change; the new address is told separately). */
+  updateEmail(userId: string, email: string): Promise<{ ok: true } | { ok: false; reason: 'email_exists' }>
 }
 
 export function createSupabaseAuthAdmin(supabase: SupabaseClient, sql: Sql): AuthAdmin {
@@ -52,6 +54,15 @@ export function createSupabaseAuthAdmin(supabase: SupabaseClient, sql: Sql): Aut
     async deleteUser(userId) {
       const { error } = await supabase.auth.admin.deleteUser(userId)
       if (error) throw error
+    },
+
+    async updateEmail(userId, email) {
+      const { error } = await supabase.auth.admin.updateUserById(userId, { email, email_confirm: true })
+      if (error) {
+        if (error.code === 'email_exists') return { ok: false, reason: 'email_exists' }
+        throw error
+      }
+      return { ok: true }
     },
 
     async generateRecoveryLink(email, redirectTo) {
