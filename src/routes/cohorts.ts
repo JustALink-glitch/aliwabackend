@@ -53,6 +53,7 @@ interface CohortCourseRow {
   name: string
   planned_session_count: number | null
   held: number
+  assignments: number
   first_session: string | null
   trainers: { id: string; firstName: string; lastName: string; isLead: boolean; status: string }[]
 }
@@ -108,10 +109,11 @@ export function cohortRoutes(deps: AppDeps) {
     .get('/:id', async (c) => {
       const { organisationId } = c.var.auth
       const cohort = await findCohort(deps.sql, organisationId, c.req.param('id'))
-      const [courses, library] = await Promise.all([
+      const [courses, library, trainerStats] = await Promise.all([
         deps.sql<CohortCourseRow[]>`
           select x.id, x.course_id, co.name, x.planned_session_count,
                  (select count(*)::int from public.sessions s where s.cohort_course_id = x.id and public.status(s) = 'held') as held,
+                 (select count(*)::int from public.assignments a where a.cohort_course_id = x.id and a.published_at is not null) as assignments,
                  (select min(s.starts_at)::text from public.sessions s where s.cohort_course_id = x.id and s.cancelled_at is null) as first_session,
                  coalesce((
                    select json_agg(json_build_object('id', m.id, 'firstName', m.first_name, 'lastName', m.last_name,
@@ -128,6 +130,17 @@ export function cohortRoutes(deps: AppDeps) {
           select id, name from public.courses
           where programme_id = ${cohort.programme_id} and archived_at is null order by created_at
         `,
+        // A3.05b: sessions each trainer led here and reports they submitted.
+        deps.sql<{ id: string; held: number; reports: number }[]>`
+          select t.member_id as id,
+                 count(distinct s.id) filter (where public.status(s) = 'held' and coalesce(s.trainer_member_id, case when t.is_lead then t.member_id end) = t.member_id)::int as held,
+                 count(distinct r.id) filter (where r.author_member_id = t.member_id and r.submitted_at is not null)::int as reports
+          from public.cohort_course_trainers t
+          join public.cohort_courses x on x.id = t.cohort_course_id and x.cohort_id = ${cohort.id}
+          left join public.sessions s on s.cohort_course_id = x.id
+          left join public.session_reports r on r.session_id = s.id
+          group by t.member_id
+        `,
       ])
       return c.json({
         cohort: toCohortSummary(cohort),
@@ -137,10 +150,12 @@ export function cohortRoutes(deps: AppDeps) {
           name: row.name,
           plannedSessions: row.planned_session_count,
           heldSessions: row.held,
+          assignments: row.assignments,
           firstSessionAt: row.first_session,
           trainers: row.trainers,
         })),
         programmeCourses: library,
+        trainerStats: Object.fromEntries(trainerStats.map((t) => [t.id, { held: t.held, reports: t.reports }])),
       })
     })
 

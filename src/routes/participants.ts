@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { participantLearning } from '../lib/learning.js'
 import { notify } from '../lib/notifications.js'
 import { z } from 'zod'
 import type { AppDeps } from '../app.js'
@@ -242,6 +243,11 @@ interface ListRow {
   programme_name: string | null
   present: number | null
   recorded: number | null
+  assignments_due: number | null
+  assignments_submitted: number | null
+  assignments_overdue: number | null
+  assignments_due_soon: number | null
+  open_flags: number | null
 }
 
 const toListItem = (row: ListRow) => ({
@@ -264,6 +270,15 @@ const toListItem = (row: ListRow) => ({
         programmeName: row.programme_name,
         // Attendance % in this cohort: present ÷ recorded (excused counts as not present).
         attendance: row.recorded ? { present: row.present ?? 0, recorded: row.recorded, rate: Math.round(((row.present ?? 0) / row.recorded) * 100) } : null,
+        // B1.01 Assignments: published work due so far, what they've handed in, and what's overdue or due this week.
+        assignments: {
+          due: row.assignments_due ?? 0,
+          submitted: row.assignments_submitted ?? 0,
+          overdue: row.assignments_overdue ?? 0,
+          dueThisWeek: row.assignments_due_soon ?? 0,
+        },
+        /** Open Needs attention flags (D1). */
+        flags: row.open_flags ?? 0,
       }
     : null,
 })
@@ -367,7 +382,9 @@ export function participantRoutes(deps: AppDeps) {
                  i.expires_at as invitation_expires_at, u.last_sign_in_at,
                  e.id as enrolment_id, e.status as enrolment_status, e.enrolled_at,
                  ch.id as cohort_id, ch.name as cohort_name, public.status(ch) as cohort_status, p.name as programme_name,
-                 att.present, att.recorded
+                 att.present, att.recorded,
+                 asg.due as assignments_due, asg.submitted as assignments_submitted, asg.overdue as assignments_overdue, asg.due_soon as assignments_due_soon,
+                 (select count(*)::int from public.attention_flags f where f.enrolment_id = e.id and f.cleared_at is null and f.resolved_at is null) as open_flags
           from public.organisation_members m
           left join public.invitations i on i.member_id = m.id and i.accepted_at is null and i.revoked_at is null
           left join auth.users u on u.id = m.user_id
@@ -388,6 +405,16 @@ export function participantRoutes(deps: AppDeps) {
             join public.cohort_courses x on x.id = s.cohort_course_id
             where a.member_id = m.id and x.cohort_id = ch.id
           ) att on true
+          left join lateral (
+            select count(*) filter (where a.due_at <= now())::int as due,
+                   count(*) filter (where a.due_at <= now() and sub.id is not null)::int as submitted,
+                   count(*) filter (where a.due_at <= now() and sub.id is null)::int as overdue,
+                   count(*) filter (where a.due_at > now() and a.due_at <= now() + interval '7 days' and sub.id is null)::int as due_soon
+            from public.assignments a
+            join public.cohort_courses x on x.id = a.cohort_course_id and x.cohort_id = ch.id
+            left join public.submissions sub on sub.assignment_id = a.id and sub.member_id = m.id
+            where a.published_at is not null
+          ) asg on true
           where m.organisation_id = ${organisationId} and m.role = 'participant'
           order by m.first_name, m.last_name
         `
@@ -546,6 +573,21 @@ export function participantRoutes(deps: AppDeps) {
       })
 
       // B1.04 Participant detail.
+      // B1.04 Attendance and assignments tabs: their sessions and work in one cohort (the current one by default).
+      .get('/:id/learning', async (c) => {
+        const { organisationId } = c.var.auth
+        const id = c.req.param('id')
+        if (!uuid.safeParse(id).success) throw notFound('Participant not found.')
+        const cohortId = uuid.safeParse(c.req.query('cohortId'))
+        const [e] = await deps.sql<{ cohort_id: string }[]>`
+          select e.cohort_id from public.enrolments e join public.organisation_members m on m.id = e.member_id and m.role = 'participant'
+          where e.member_id = ${id} and e.organisation_id = ${organisationId} ${cohortId.success ? deps.sql`and e.cohort_id = ${cohortId.data}` : deps.sql``}
+          order by (e.status = 'active') desc, e.enrolled_at desc limit 1
+        `
+        if (!e) throw notFound('Participant not found.')
+        return c.json({ cohortId: e.cohort_id, ...(await participantLearning(deps.sql, { memberId: id, cohortId: e.cohort_id })) })
+      })
+
       .get('/:id', async (c) => {
         const { organisationId } = c.var.auth
         const row = await findParticipant(deps.sql, organisationId, c.req.param('id'))

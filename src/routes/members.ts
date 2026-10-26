@@ -71,8 +71,9 @@ interface MemberRow {
   joined_at: Date | null
   invitation_expires_at: Date | null
   last_sign_in_at?: Date | null
-  /** Live (not archived) cohorts and courses this person teaches. */
+  /** Running and upcoming cohorts (not archived or completed) and the courses this person teaches there. */
   teaching?: { cohorts: { id: string; name: string }[]; courses: { id: string; name: string }[] }
+  sessions_this_week?: number
 }
 
 const toMember = (row: MemberRow) => ({
@@ -88,6 +89,7 @@ const toMember = (row: MemberRow) => ({
   invitationExpiresAt: row.invitation_expires_at,
   lastActiveAt: row.last_sign_in_at ?? null,
   teaching: row.teaching ?? { cohorts: [], courses: [] },
+  sessionsThisWeek: row.sessions_this_week ?? 0,
 })
 
 /** Cohorts and courses a member teaches, as JSON, for the B2.01 columns. */
@@ -97,9 +99,16 @@ const teachingSql = (sql: AppDeps['sql']) => sql`
      'courses', coalesce(json_agg(distinct jsonb_build_object('id', co.id, 'name', co.name)) filter (where co.id is not null), '[]'))
    from public.cohort_course_trainers t
    join public.cohort_courses x on x.id = t.cohort_course_id
-   join public.cohorts h on h.id = x.cohort_id and h.archived_at is null
+   join public.cohorts h on h.id = x.cohort_id and h.archived_at is null and public.status(h) <> 'completed'
    join public.courses co on co.id = x.course_id
-   where t.member_id = m.id) as teaching`
+   where t.member_id = m.id) as teaching,
+  -- B2.01 Sessions this week (Monday to Sunday in the organisation's time zone) that they lead.
+  (select count(*)::int from public.sessions s
+     join public.organisations o on o.id = s.organisation_id
+    where s.organisation_id = m.organisation_id and s.cancelled_at is null
+      and coalesce(s.trainer_member_id, (select l.member_id from public.cohort_course_trainers l where l.cohort_course_id = s.cohort_course_id and l.is_lead limit 1)) = m.id
+      and (s.starts_at at time zone o.time_zone) >= date_trunc('week', now() at time zone o.time_zone)
+      and (s.starts_at at time zone o.time_zone) < date_trunc('week', now() at time zone o.time_zone) + interval '7 days') as sessions_this_week`
 
 /** History entries shown on the person's page (B2.02i "Invitation history"). */
 const HISTORY_ACTIONS = ['member.invited', 'member.invitation_resent', 'member.invitation_renewed', 'member.joined']

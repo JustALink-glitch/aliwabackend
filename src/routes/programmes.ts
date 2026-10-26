@@ -39,6 +39,7 @@ interface ProgrammeRow {
   cohort_completed: number
   participants: number
   attendance_4w: number | null
+  needs_attention: number
 }
 
 /**
@@ -78,6 +79,8 @@ const toProgramme = (row: ProgrammeRow) => ({
   },
   participants: row.participants,
   attendance4w: row.attendance_4w,
+  // D1: participants with an open flag in this programme's running cohorts.
+  needsAttention: row.needs_attention,
   createdAt: row.created_at,
   archivedAt: row.archived_at,
 })
@@ -93,7 +96,12 @@ function selectProgrammes(sql: Sql | Tx, organisationId: string, id?: string) {
            coalesce(ch.upcoming, 0)::int as cohort_upcoming,
            coalesce(ch.completed, 0)::int as cohort_completed,
            coalesce(en.n, 0)::int as participants,
-           ${attendanceRateSql(sql, sql`select id from public.cohorts c where c.programme_id = p.id and c.archived_at is null`, true)} as attendance_4w
+           ${attendanceRateSql(sql, sql`select id from public.cohorts c where c.programme_id = p.id and c.archived_at is null`, true)} as attendance_4w,
+           (select count(distinct f.enrolment_id)::int from public.attention_flags f
+              join public.enrolments e on e.id = f.enrolment_id and e.status = 'active'
+              join public.cohorts c on c.id = e.cohort_id
+            where c.programme_id = p.id and c.archived_at is null and public.status(c) = 'active'
+              and f.cleared_at is null and f.resolved_at is null) as needs_attention
     from public.programmes p
     left join public.organisation_members lead on lead.id = p.lead_member_id
     left join lateral (
@@ -348,6 +356,10 @@ export interface CohortSummaryRow {
   held_sessions: number
   attendance_4w: number | null
   attendance_all: number | null
+  needs_attention: number
+  next_starts_at: Date | null
+  next_mode: string | null
+  next_location: string | null
 }
 
 export function selectCohortSummaries(
@@ -364,7 +376,10 @@ export function selectCohortSummaries(
            coalesce(se.held, 0)::int as held_sessions,
            coalesce(en.n, 0)::int as participants,
            ${attendanceRateSql(sql, sql`select c.id`, true)} as attendance_4w,
-           ${attendanceRateSql(sql, sql`select c.id`, false)} as attendance_all
+           ${attendanceRateSql(sql, sql`select c.id`, false)} as attendance_all,
+           (select count(distinct f.enrolment_id)::int from public.attention_flags f join public.enrolments e on e.id = f.enrolment_id and e.status = 'active'
+            where e.cohort_id = c.id and f.cleared_at is null and f.resolved_at is null) as needs_attention,
+           nx.starts_at as next_starts_at, nx.mode as next_mode, nx.location as next_location
     from public.cohorts c
     join public.programmes p on p.id = c.programme_id
     left join lateral (
@@ -379,6 +394,10 @@ export function selectCohortSummaries(
     left join lateral (
       select count(*) as n from public.enrolments e where e.cohort_id = c.id and e.status in ('active', 'completed')
     ) en on true
+    left join lateral (
+      select s.starts_at, s.mode::text as mode, s.location from public.sessions s join public.cohort_courses x on x.id = s.cohort_course_id
+      where x.cohort_id = c.id and s.cancelled_at is null and s.ends_at > now() order by s.starts_at limit 1
+    ) nx on true
     where c.organisation_id = ${organisationId}
       ${filter.programmeId ? sql`and c.programme_id = ${filter.programmeId}` : sql``}
       ${filter.id ? sql`and c.id = ${filter.id}` : sql``}
@@ -401,5 +420,7 @@ export const toCohortSummary = (row: CohortSummaryRow) => ({
   heldSessions: row.held_sessions,
   attendance4w: row.attendance_4w,
   attendanceAll: row.attendance_all,
+  needsAttention: row.needs_attention,
+  nextSession: row.next_starts_at ? { startsAt: row.next_starts_at, mode: row.next_mode, location: row.next_location } : null,
   archivedAt: row.archived_at,
 })
